@@ -97,7 +97,7 @@ class RegistrationBot:
         # INTENTS
         print("")
         intents = discord.Intents.default()
-        intents.message_content = True
+        intents.message_content = False
 
         self.client = MCRegistrationClient(intents=intents)
         self.setup_commands()
