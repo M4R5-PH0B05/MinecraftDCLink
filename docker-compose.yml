@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  mc-dc-bot:
+    build: .
+    container_name: mc-dc-bot
+    restart: unless-stopped
+    environment:
+      DISCORD_BOT_TOKEN: "YOUR_DISCORD_BOT_TOKEN"
+      DB_HOST: "YOUR_DB_HOST"
+      DB_PORT: "YOUR_DB_PORT"
+      DB_NAME: "YOUR_DB_NAME"
+      DB_USER: "YOUR_DB_USER"
+      DB_PASSWORD: "YOUR_DB_PASSWORD"
+      MC_AUTH_BIND_HOST: "0.0.0.0"
+      MC_AUTH_BIND_PORT: "9925"
+      MC_AUTH_API_KEY: "REPLACE_WITH_YOUR_API_KEY"
+    ports:
+      - "9925:9925"
