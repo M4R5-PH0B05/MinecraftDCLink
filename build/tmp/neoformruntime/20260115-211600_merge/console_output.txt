@@ -1,0 +1,18 @@
+--------------------------------------------------------------------------------
+
+Command-Line:
+ - C:\Users\morga\.jdks\ms-21.0.9\bin\java.exe
+ - -jar
+ - C:\Users\morga\.gradle\caches\modules-2\files-2.1\net.neoforged\mergetool\2.0.3\85c096b0155715275f84922d41462484c9a0285c\mergetool-2.0.3-fatjar.jar
+ - --client
+ - C:\Users\morga\.gradle\caches\neoformruntime\intermediate_results\stripClient_78e2636e929045352534b1a95e25a63b5a1776ad_output.jar
+ - --server
+ - C:\Users\morga\.gradle\caches\neoformruntime\intermediate_results\stripServer_5acdadc6e3423030fd584cd99134abf822679947_output.jar
+ - --ann
+ - 1.21.1
+ - --output
+ - ./output.jar
+ - --inject
+ - false
+--------------------------------------------------------------------------------
+

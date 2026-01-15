@@ -1,0 +1,36 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '1.0.14'
+}
+
+group = 'com.marsphobos'
+version = '1.0.0'
+
+base {
+    archivesName = 'minecraftdclink'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+}
+
+neoForge {
+    version = '21.1.209'
+    runs {
+        server {
+            server()
+        }
+    }
+    mods {
+        minecraftdclink {
+            sourceSet sourceSets.main
+        }
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+}

@@ -1,0 +1,26 @@
+modLoader="javafml"
+loaderVersion="[2,)"
+license="All Rights Reserved"
+
+[[mods]]
+modId="minecraftdclink"
+version="${file.jarVersion}"
+displayName="Minecraft DC Link"
+authors="marsphobos"
+description='''
+Require Discord registration before players can move.
+'''
+
+[[dependencies.minecraftdclink]]
+modId="neoforge"
+type="required"
+versionRange="[21.1.209,)"
+ordering="NONE"
+side="SERVER"
+
+[[dependencies.minecraftdclink]]
+modId="minecraft"
+type="required"
+versionRange="[1.21.1,)"
+ordering="NONE"
+side="SERVER"

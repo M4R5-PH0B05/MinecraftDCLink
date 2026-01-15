@@ -1,13 +1,12 @@
 import os
 import uuid
 import asyncio
-import aiomysql
+import asyncpg
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
-import struct
-import socket
-import io
+import aiohttp
+from aiohttp import web
 
 # ENV VARIABLES
 load_dotenv()
@@ -19,21 +18,76 @@ class MCRegistrationClient(discord.Client):
         super().__init__(intents=intents)
         self.pool = None
         self.tree = app_commands.CommandTree(self)
+        self.api_runner = None
 
     # CONNECT TO DB
     async def setup_hook(self):
-        self.pool = await aiomysql.create_pool(
+        self.pool = await asyncpg.create_pool(
             host=os.getenv('DB_HOST'),
             port=int(os.getenv('DB_PORT')),
-            db=os.getenv('DB_NAME'),
+            database=os.getenv('DB_NAME'),
             user=os.getenv('DB_USER'),
             password=os.getenv('DB_PASSWORD'),
-            autocommit=True
         )
+
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    minecraft_uuid VARCHAR(36) PRIMARY KEY,
+                    discord_id BIGINT UNIQUE,
+                    current_username VARCHAR(255) NOT NULL,
+                    registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+        await self.start_api_server()
 
         await self.tree.sync()
         print("Synced Slash Commands.")
 
+    async def start_api_server(self):
+        api_key = os.getenv('MC_AUTH_API_KEY', '')
+        bind_host = os.getenv('MC_AUTH_BIND_HOST', '127.0.0.1')
+        bind_port = int(os.getenv('MC_AUTH_BIND_PORT', '8080'))
+
+        app = web.Application()
+        app['pool'] = self.pool
+        app['api_key'] = api_key
+        app.router.add_get('/v1/registration/{minecraft_uuid}', self.handle_registration)
+
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, bind_host, bind_port)
+        await site.start()
+        self.api_runner = runner
+        print(f"API server running on {bind_host}:{bind_port}")
+
+    async def handle_registration(self, request: web.Request):
+        api_key = request.app['api_key']
+        provided_key = request.headers.get('X-API-Key', '')
+        if api_key and provided_key != api_key:
+            return web.json_response({'registered': False, 'error': 'unauthorized'}, status=401)
+
+        minecraft_uuid = request.match_info.get('minecraft_uuid', '')
+        try:
+            uuid.UUID(minecraft_uuid)
+        except ValueError:
+            return web.json_response({'registered': False, 'error': 'invalid_uuid'}, status=400)
+
+        async with request.app['pool'].acquire() as conn:
+            result = await conn.fetchrow(
+                'SELECT discord_id FROM users WHERE minecraft_uuid = $1',
+                minecraft_uuid
+            )
+
+        if result and result['discord_id']:
+            return web.json_response({'registered': True, 'discord_id': int(result['discord_id'])})
+        return web.json_response({'registered': False})
+
+    async def close(self):
+        if self.api_runner:
+            await self.api_runner.cleanup()
+        await super().close()
 
 # MAIN BOT
 class RegistrationBot:
@@ -46,63 +100,20 @@ class RegistrationBot:
         intents.message_content = True
 
         self.client = MCRegistrationClient(intents=intents)
-        self.minecraft_server_host = os.getenv('MINECRAFT_SERVER_HOST', 'localhost')
-        self.minecraft_server_port = int(os.getenv('MINECRAFT_SERVER_PORT', '25565'))
         self.setup_commands()
-
-    def send_plugin_message(self, minecraft_uuid, discord_id):
-        """
-        Send a plugin message to the Minecraft server to link a Discord account via Bungeecord/Spigot plugin messaging
-
-        Args:
-            minecraft_uuid (str): Minecraft player UUID
-            discord_id (int): Discord user ID
-
-        Returns:
-            bool: True if message sent successfully, False otherwise
-        """
-        try:
-            # Create a socket connection to the Minecraft server
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                # Connect to the Minecraft server
-                sock.connect((self.minecraft_server_host, self.minecraft_server_port))
-
-                # Create a byte stream for the plugin message
-                output = io.BytesIO()
-
-                # Write the Discord ID as a long (8 bytes)
-                output.write(struct.pack('>Q', discord_id))
-
-                # Write the Minecraft UUID as a UTF-8 string
-                # Note: using .encode('utf-8') and sending as UTF string matches the Java readUTF()
-                uuid_bytes = minecraft_uuid.encode('utf-8')
-                output.write(uuid_bytes)
-
-                # Get the complete message byte array
-                message = output.getvalue()
-
-                # Prepare the packet with the correct channel name used in the Java plugin
-                packet = b'clipstone:registration' + message
-
-                # Send the packet
-                sock.sendall(packet)
-
-                print(f"Successfully sent plugin message for UUID {minecraft_uuid}")
-                return True
-
-        except socket.error as e:
-            print(f"Socket error when sending plugin message: {e}")
-            return False
-        except Exception as e:
-            print(f"Error sending plugin message: {e}")
-            return False
 
     def setup_commands(self):
         @self.client.tree.command(name='register', description='Register your Minecraft Account')
-        @app_commands.describe(minecraft_uuid='Your Minecraft Account UUID')
-        async def link_minecraft(interaction: discord.Interaction, minecraft_uuid: str):
+        @app_commands.describe(minecraft_name='Your Minecraft Account Name')
+        async def link_minecraft(interaction: discord.Interaction, minecraft_name: str):
             try:
-                # VALIDATE UUID
+                minecraft_uuid = await self.resolve_uuid(minecraft_name)
+                if not minecraft_uuid:
+                    await interaction.response.send_message(
+                        "Could not find that Minecraft name. Double-check spelling.",
+                        ephemeral=True
+                    )
+                    return
                 parsed_uuid = uuid.UUID(minecraft_uuid)
 
                 if not self.client.pool:
@@ -110,61 +121,66 @@ class RegistrationBot:
                     return
 
                 async with self.client.pool.acquire() as conn:
-                    async with conn.cursor() as cursor:
-                        try:
-                            # First, check the total number of registered users
-                            await cursor.execute('SELECT COUNT(*) as user_count FROM users')
-                            result = await cursor.fetchone()
-                            current_user_count = result[0]
+                    try:
+                        # First, check the total number of registered users
+                        result = await conn.fetchrow('SELECT COUNT(*) AS user_count FROM users')
+                        current_user_count = result['user_count']
 
-                            # Check if we've reached the maximum number of users
-                            if current_user_count >= self.MAX_USERS:
-                                await interaction.response.send_message(
-                                    f"Registration is full. Maximum of {self.MAX_USERS} users have already been registered.",
-                                    ephemeral=True
-                                )
-                                return
-
-                            # Check if this user is already registered
-                            await cursor.execute('SELECT * FROM users WHERE discord_id = %s OR minecraft_uuid = %s',
-                                                 (interaction.user.id, str(parsed_uuid)))
-                            existing_user = await cursor.fetchone()
-
-                            if existing_user:
-                                await interaction.response.send_message(
-                                    "Either your Discord account or this Minecraft account are already registered.",
-                                    ephemeral=True
-                                )
-                                return
-
-                            # Proceed with registration
-                            await cursor.execute('''
-                            INSERT INTO users (minecraft_uuid, discord_id, current_username)
-                            VALUES (%s, %s, %s)
-                            ON DUPLICATE KEY UPDATE
-                            discord_id = %s,
-                            current_username = %s
-                            ''', (str(parsed_uuid), interaction.user.id, interaction.user.name,
-                                  interaction.user.id, interaction.user.name))
-
-                            # Send plugin message to Minecraft server
-                            if self.send_plugin_message(str(parsed_uuid), interaction.user.id):
-                                await interaction.response.send_message(
-                                    f"Successfully initiated account link for UUID `{minecraft_uuid}`! "
-                                    "Please run the /register command again in Minecraft in order to complete the process.",
-                                    ephemeral=True
-                                )
-                            else:
-                                await interaction.response.send_message(
-                                    "Linked in database, but could not send message to Minecraft server.",
-                                    ephemeral=True
-                                )
-
-                        except Exception as db_error:
+                        # Check if we've reached the maximum number of users
+                        if current_user_count >= self.MAX_USERS:
                             await interaction.response.send_message(
-                                f"Registration failed: {str(db_error)}",
+                                f"Registration is full. Maximum of {self.MAX_USERS} users have already been registered.",
                                 ephemeral=True
                             )
+                            return
+
+                        # Check if this user is already registered
+                        existing_user = await conn.fetchrow(
+                            'SELECT 1 FROM users WHERE discord_id = $1 OR minecraft_uuid = $2',
+                            interaction.user.id, str(parsed_uuid)
+                        )
+
+                        if existing_user:
+                            await interaction.response.send_message(
+                                "Either your Discord account or this Minecraft account are already registered.",
+                                ephemeral=True
+                            )
+                            return
+
+                        # Proceed with registration
+                        await conn.execute('''
+                            INSERT INTO users (minecraft_uuid, discord_id, current_username)
+                            VALUES ($1, $2, $3)
+                            ON CONFLICT (minecraft_uuid)
+                            DO UPDATE SET
+                                discord_id = EXCLUDED.discord_id,
+                                current_username = EXCLUDED.current_username
+                        ''', str(parsed_uuid), interaction.user.id, minecraft_name)
+
+                        await interaction.response.send_message(
+                            f"Successfully linked `{minecraft_name}`! You can now join the server.",
+                            ephemeral=True
+                        )
+
+                        if interaction.guild and isinstance(interaction.user, discord.Member):
+                            try:
+                                await interaction.user.edit(nick=minecraft_name)
+                            except discord.Forbidden:
+                                await interaction.followup.send(
+                                    "Linked, but I don't have permission to change your nickname.",
+                                    ephemeral=True
+                                )
+                            except discord.HTTPException:
+                                await interaction.followup.send(
+                                    "Linked, but I couldn't change your nickname.",
+                                    ephemeral=True
+                                )
+
+                    except Exception as db_error:
+                        await interaction.response.send_message(
+                            f"Registration failed: {str(db_error)}",
+                            ephemeral=True
+                        )
 
             except ValueError:
                 await interaction.response.send_message(
@@ -180,23 +196,33 @@ class RegistrationBot:
                 return
 
             async with self.client.pool.acquire() as conn:
-                async with conn.cursor(aiomysql.DictCursor) as cursor:
-                    await cursor.execute(
-                        'SELECT minecraft_uuid, current_username FROM users WHERE discord_id = %s',
-                        (interaction.user.id,)
-                    )
-                    result = await cursor.fetchone()
+                result = await conn.fetchrow(
+                    'SELECT minecraft_uuid, current_username FROM users WHERE discord_id = $1',
+                    interaction.user.id
+                )
 
-                    if result:
-                        await interaction.response.send_message(
-                            f"Your Discord is linked to the Minecraft account with the UUID: `{result['minecraft_uuid']}`",
-                            ephemeral=True
-                        )
-                    else:
-                        await interaction.response.send_message(
-                            "No Minecraft account is currently linked to your Discord.",
-                            ephemeral=True
-                        )
+                if result:
+                    await interaction.response.send_message(
+                        f"Your Discord is linked to the Minecraft account with the UUID: `{result['minecraft_uuid']}`",
+                        ephemeral=True
+                    )
+                else:
+                    await interaction.response.send_message(
+                        "No Minecraft account is currently linked to your Discord.",
+                        ephemeral=True
+                    )
+
+    async def resolve_uuid(self, minecraft_name: str):
+        url = f"https://api.mojang.com/users/profiles/minecraft/{minecraft_name}"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    return None
+                data = await response.json()
+                raw_uuid = data.get('id')
+                if not raw_uuid or len(raw_uuid) != 32:
+                    return None
+                return str(uuid.UUID(raw_uuid))
 
     def run(self):
         self.client.run(os.getenv('DISCORD_BOT_TOKEN'))
