@@ -1,2 +1,2 @@
 # MinecraftDCLink
-A Spigot Plugin to register Minecraft SMP accounts using an alongside Discord bot.
+A Minecraft Neoforge mod to add discord based user authentication, and Minecraft server status panel in discord..
