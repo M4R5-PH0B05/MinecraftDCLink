@@ -604,7 +604,7 @@ class RegistrationBot:
                             description=f"Linked `{minecraft_name}`. You can now join the server.",
                             color=discord.Color.green()
                         )
-                        embed.set_thumbnail(url=f"https://mc-heads.net/avatar/{parsed_uuid}/64")
+                        embed.set_thumbnail(url=f"https://minotar.net/avatar/{minecraft_name}/64")
                         await interaction.followup.send(embed=embed, ephemeral=True)
 
                         if interaction.guild and isinstance(interaction.user, discord.Member):
@@ -742,7 +742,7 @@ class RegistrationBot:
                 color=discord.Color.orange(),
                 description="Live stats fetched from the server." if stats is not None else "Offline stats from cache."
             )
-            embed.set_thumbnail(url=f"https://mc-heads.net/avatar/{minecraft_uuid}/64")
+            embed.set_thumbnail(url=f"https://minotar.net/avatar/{display_name}/64")
             embed.add_field(name="Level", value=str(level), inline=True)
             embed.add_field(name="Playtime", value=f"{hours}h {minutes}m", inline=True)
             embed.add_field(name="Deaths", value=str(deaths), inline=True)
