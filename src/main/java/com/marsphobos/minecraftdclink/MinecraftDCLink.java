@@ -218,7 +218,17 @@ public class MinecraftDCLink {
         if (prefix == null) {
             return;
         }
-        event.setMessage(Component.literal("").append(prefix).append(event.getMessage()));
+        String username = event.getUsername();
+        String rawText = event.getRawText();
+        Component nameComponent = Component.literal(username).withStyle(roleManager.getNameStyle(player.getUUID()));
+        Component message = Component.literal("<")
+                .append(prefix)
+                .append(nameComponent)
+                .append(Component.literal("> " + rawText));
+        event.setCanceled(true);
+        if (server != null) {
+            server.getPlayerList().broadcastSystemMessage(message, false);
+        }
     }
 
     private void onServerTick(ServerTickEvent.Post event) {

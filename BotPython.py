@@ -29,6 +29,7 @@ class MCRegistrationClient(discord.Client):
         self.panel_message_id = None
         self.last_server_status = {}
         self.panel_task = None
+        self.server_address = ""
 
     # CONNECT TO DB
     async def setup_hook(self):
@@ -245,7 +246,8 @@ class MCRegistrationClient(discord.Client):
 
         embed = discord.Embed(
             title="Minecraft Server Panel",
-            description="Live server snapshot",
+            url="https://github.com/M4R5-PH0B05/MinecraftDCLink",
+            description="This panel shows live server status, online players, and game time. Any issues, contact mars_phobos.",
             color=discord.Color.blurple(),
             timestamp=discord.utils.utcnow()
         )
@@ -259,6 +261,8 @@ class MCRegistrationClient(discord.Client):
             embed.add_field(name="Players", value=f"👥 {online_count}", inline=True)
         if ping is not None:
             embed.add_field(name="Ping", value=f"📶 {ping} ms", inline=True)
+        if self.server_address:
+            embed.add_field(name="Server IP", value=f"🔗 {self.server_address}", inline=True)
 
         day = self.last_server_status.get('day')
         time_of_day = self.last_server_status.get('time')
@@ -278,6 +282,8 @@ class MCRegistrationClient(discord.Client):
             embed.add_field(name="Online Players", value=players_value, inline=False)
         else:
             embed.add_field(name="Online Players", value="🔴 None", inline=False)
+
+        embed.set_footer(text="MinecraftDCLink • View on GitHub")
 
         message = None
         if self.panel_message_id:
@@ -364,6 +370,7 @@ class RegistrationBot:
         self.client.query_host = os.getenv('MC_QUERY_HOST', '127.0.0.1')
         self.client.query_port = int(os.getenv('MC_QUERY_PORT', '25565'))
         self.client.status_url = os.getenv('MC_STATUS_URL', '').strip()
+        self.client.server_address = os.getenv('MC_SERVER_ADDRESS', '').strip()
         self.setup_commands()
 
     def setup_commands(self):

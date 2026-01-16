@@ -56,6 +56,14 @@ public class RoleManager {
         return Component.literal("[" + roleInfo.roleName() + "] ").withStyle(style);
     }
 
+    public Style getNameStyle(UUID playerId) {
+        RegistrationClient.RoleInfo roleInfo = roleCache.get(playerId);
+        if (roleInfo == null || roleInfo.color() == 0) {
+            return Style.EMPTY;
+        }
+        return Style.EMPTY.withColor(TextColor.fromRgb(roleInfo.color()));
+    }
+
     private void applyRole(UUID playerId, RegistrationClient.RoleInfo roleInfo) {
         if (server == null) {
             return;
