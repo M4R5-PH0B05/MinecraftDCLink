@@ -16,6 +16,7 @@ public final class FileConfig {
     public static int apiTimeoutSeconds = 5;
     public static int checkIntervalSeconds = 10;
     public static int messageIntervalSeconds = 30;
+    public static int statusIntervalSeconds = 30;
     public static String instructionMessage = "Please register your account in the #auth channel of the Discord server.";
 
     private FileConfig() {
@@ -40,6 +41,7 @@ public final class FileConfig {
             apiTimeoutSeconds = parseInt(properties.getProperty("api.timeoutSeconds"), apiTimeoutSeconds);
             checkIntervalSeconds = parseInt(properties.getProperty("behavior.checkIntervalSeconds"), checkIntervalSeconds);
             messageIntervalSeconds = parseInt(properties.getProperty("behavior.messageIntervalSeconds"), messageIntervalSeconds);
+            statusIntervalSeconds = parseInt(properties.getProperty("behavior.statusIntervalSeconds"), statusIntervalSeconds);
             instructionMessage = properties.getProperty("behavior.instructionMessage", instructionMessage);
 
             properties.setProperty("api.baseUrl", apiBaseUrl);
@@ -47,6 +49,7 @@ public final class FileConfig {
             properties.setProperty("api.timeoutSeconds", Integer.toString(apiTimeoutSeconds));
             properties.setProperty("behavior.checkIntervalSeconds", Integer.toString(checkIntervalSeconds));
             properties.setProperty("behavior.messageIntervalSeconds", Integer.toString(messageIntervalSeconds));
+            properties.setProperty("behavior.statusIntervalSeconds", Integer.toString(statusIntervalSeconds));
             properties.setProperty("behavior.instructionMessage", instructionMessage);
 
             try (BufferedOutputStream out = new BufferedOutputStream(Files.newOutputStream(configFile))) {

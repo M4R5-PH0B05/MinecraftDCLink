@@ -22,6 +22,13 @@ class MCRegistrationClient(discord.Client):
         self.log_channel_id = None
         self.log_channel = None
         self.guild_id = None
+        self.online_players = set()
+        self.query_host = "127.0.0.1"
+        self.query_port = 25565
+        self.status_url = ""
+        self.panel_message_id = None
+        self.last_server_status = {}
+        self.panel_task = None
 
     # CONNECT TO DB
     async def setup_hook(self):
@@ -51,10 +58,16 @@ class MCRegistrationClient(discord.Client):
         if guild_id.isdigit():
             self.guild_id = int(guild_id)
 
+        panel_message = os.getenv('MC_PANEL_MESSAGE_ID', '').strip()
+        if panel_message.isdigit():
+            self.panel_message_id = int(panel_message)
+
         await self.start_api_server()
 
         await self.tree.sync()
         print("Synced Slash Commands.")
+
+        self.panel_task = asyncio.create_task(self.panel_loop())
 
     async def start_api_server(self):
         api_key = os.getenv('MC_AUTH_API_KEY', '')
@@ -67,6 +80,7 @@ class MCRegistrationClient(discord.Client):
         app.router.add_get('/v1/registration/{minecraft_uuid}', self.handle_registration)
         app.router.add_post('/v1/mc-event', self.handle_mc_event)
         app.router.add_get('/v1/role/{minecraft_uuid}', self.handle_role_info)
+        app.router.add_post('/v1/server-status', self.handle_server_status)
 
         runner = web.AppRunner(app)
         await runner.setup()
@@ -129,26 +143,12 @@ class MCRegistrationClient(discord.Client):
                 minecraft_uuid
             )
 
-        registered = bool(result and result['discord_id'])
-        status = "registered" if registered else "unregistered"
-        verb = "joined" if event_type == "join" else "left"
-        message = f"[MC] {minecraft_name} {verb} ({status})"
+        if event_type == "join" and minecraft_name:
+            self.online_players.add(minecraft_name)
+        elif event_type == "leave" and minecraft_name:
+            self.online_players.discard(minecraft_name)
 
-        channel = self.log_channel
-        if channel is None:
-            channel = self.get_channel(self.log_channel_id)
-        if channel is None:
-            try:
-                channel = await self.fetch_channel(self.log_channel_id)
-            except discord.HTTPException:
-                return web.json_response({'ok': False, 'error': 'channel_not_found'}, status=404)
-            self.log_channel = channel
-
-        try:
-            await channel.send(message)
-        except discord.HTTPException:
-            return web.json_response({'ok': False, 'error': 'send_failed'}, status=500)
-
+        await self.update_panel()
         return web.json_response({'ok': True})
 
     async def handle_role_info(self, request: web.Request):
@@ -195,9 +195,158 @@ class MCRegistrationClient(discord.Client):
         top_role = max(roles, key=lambda r: r.position)
         return web.json_response({'ok': True, 'role': top_role.name, 'color': top_role.color.value})
 
+    async def handle_server_status(self, request: web.Request):
+        api_key = request.app['api_key']
+        provided_key = request.headers.get('X-API-Key', '')
+        if api_key and provided_key != api_key:
+            return web.json_response({'ok': False, 'error': 'unauthorized'}, status=401)
+
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({'ok': False, 'error': 'invalid_json'}, status=400)
+
+        day = payload.get('day')
+        time_of_day = payload.get('time')
+        if not isinstance(day, int) or not isinstance(time_of_day, int):
+            return web.json_response({'ok': False, 'error': 'invalid_payload'}, status=400)
+
+        self.last_server_status = {'day': day, 'time': time_of_day}
+        await self.update_panel()
+        return web.json_response({'ok': True})
+
+    async def panel_loop(self):
+        while True:
+            try:
+                await self.update_panel()
+            except Exception:
+                pass
+            await asyncio.sleep(30)
+
+    async def update_panel(self):
+        if not self.log_channel_id:
+            return
+
+        channel = self.log_channel
+        if channel is None:
+            channel = self.get_channel(self.log_channel_id)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(self.log_channel_id)
+            except discord.HTTPException:
+                return
+            self.log_channel = channel
+
+        online_names = await self.fetch_online_players()
+        if online_names is None or not online_names:
+            online_names = self.online_players
+
+        status = await self.fetch_server_status()
+
+        embed = discord.Embed(
+            title="Minecraft Server Panel",
+            color=discord.Color.blurple(),
+            timestamp=discord.utils.utcnow()
+        )
+        online_count = status.get('online', len(online_names))
+        max_players = status.get('max', 0)
+        ping = status.get('ping', None)
+
+        if max_players:
+            embed.add_field(name="Players", value=f"{online_count}/{max_players}", inline=True)
+        else:
+            embed.add_field(name="Players", value=str(online_count), inline=True)
+        if ping is not None:
+            embed.add_field(name="Ping", value=f"{ping} ms", inline=True)
+
+        day = self.last_server_status.get('day')
+        time_of_day = self.last_server_status.get('time')
+        if isinstance(day, int) and isinstance(time_of_day, int):
+            hour = ((time_of_day + 6000) % 24000) / 1000.0
+            hours = int(hour)
+            minutes = int((hour - hours) * 60)
+            embed.add_field(name="Game Time", value=f"Day {day}, {hours:02d}:{minutes:02d}", inline=True)
+        else:
+            embed.add_field(name="Game Time", value="Unknown", inline=True)
+
+        if online_names:
+            names_list = sorted(online_names)
+            players_value = ", ".join(names_list)
+            if len(players_value) > 1000:
+                players_value = players_value[:1000] + "..."
+            embed.add_field(name="Online Players", value=players_value, inline=False)
+        else:
+            embed.add_field(name="Online Players", value="None", inline=False)
+
+        message = None
+        if self.panel_message_id:
+            try:
+                message = await channel.fetch_message(self.panel_message_id)
+            except discord.HTTPException:
+                message = None
+
+        if message is None:
+            message = await channel.send(embed=embed)
+            self.panel_message_id = message.id
+            print(f"Panel message ID: {self.panel_message_id}")
+        else:
+            await message.edit(embed=embed)
+
+    async def fetch_online_players(self):
+        if self.status_url:
+            url = self.status_url
+        else:
+            url = f"https://api.mcstatus.io/v2/status/java/{self.query_host}:{self.query_port}"
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=5) as response:
+                    if response.status != 200:
+                        return None
+                    data = await response.json()
+        except Exception:
+            return None
+
+        players = data.get('players', {})
+        raw_list = players.get('list', [])
+        if isinstance(raw_list, list):
+            names = []
+            for entry in raw_list:
+                if isinstance(entry, str):
+                    names.append(entry)
+                elif isinstance(entry, dict):
+                    name = entry.get('name_raw') or entry.get('name_clean') or entry.get('name')
+                    if name:
+                        names.append(name)
+            return set(names)
+        return set()
+
+    async def fetch_server_status(self):
+        if self.status_url:
+            url = self.status_url
+        else:
+            url = f"https://api.mcstatus.io/v2/status/java/{self.query_host}:{self.query_port}"
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=5) as response:
+                    if response.status != 200:
+                        return {}
+                    data = await response.json()
+        except Exception:
+            return {}
+
+        players = data.get('players', {})
+        online = players.get('online', 0)
+        max_players = players.get('max', 0)
+        ping = data.get('latency')
+        return {'online': online, 'max': max_players, 'ping': ping}
+
     async def close(self):
         if self.api_runner:
             await self.api_runner.cleanup()
+        if self.panel_task:
+            self.panel_task.cancel()
         await super().close()
 
 # MAIN BOT
@@ -211,9 +360,9 @@ class RegistrationBot:
         intents.message_content = False
 
         self.client = MCRegistrationClient(intents=intents)
-        self.query_host = os.getenv('MC_QUERY_HOST', '127.0.0.1')
-        self.query_port = int(os.getenv('MC_QUERY_PORT', '25565'))
-        self.status_url = os.getenv('MC_STATUS_URL', '').strip()
+        self.client.query_host = os.getenv('MC_QUERY_HOST', '127.0.0.1')
+        self.client.query_port = int(os.getenv('MC_QUERY_PORT', '25565'))
+        self.client.status_url = os.getenv('MC_STATUS_URL', '').strip()
         self.setup_commands()
 
     def setup_commands(self):
@@ -224,13 +373,24 @@ class RegistrationBot:
                 if not interaction.response.is_done():
                     await interaction.response.defer(ephemeral=True)
 
-                online_players = await self.fetch_online_players()
-                if online_players is None:
+                if minecraft_name in self.client.online_players:
+                    online_players = self.client.online_players
+                else:
+                    online_players = await self.client.fetch_online_players()
+                    if online_players is None:
+                        await interaction.followup.send(
+                            "Cannot check server status right now. Try again later.",
+                            ephemeral=True
+                        )
+                        return
+
+                if not online_players:
                     await interaction.followup.send(
-                        "Cannot check server status right now. Try again later.",
+                        "Server did not provide an online player list. Rejoin the server and try again.",
                         ephemeral=True
                     )
                     return
+
                 if minecraft_name not in online_players:
                     await interaction.followup.send(
                         f"`{minecraft_name}` is not online. Join the server first, then try again.",
@@ -359,33 +519,7 @@ class RegistrationBot:
                 return str(uuid.UUID(raw_uuid))
 
     async def fetch_online_players(self):
-        if self.status_url:
-            url = self.status_url
-        else:
-            url = f"https://api.mcstatus.io/v2/status/java/{self.query_host}:{self.query_port}"
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=5) as response:
-                    if response.status != 200:
-                        return None
-                    data = await response.json()
-        except Exception:
-            return None
-
-        players = data.get('players', {})
-        raw_list = players.get('list', [])
-        if isinstance(raw_list, list):
-            names = []
-            for entry in raw_list:
-                if isinstance(entry, str):
-                    names.append(entry)
-                elif isinstance(entry, dict):
-                    name = entry.get('name_raw') or entry.get('name_clean') or entry.get('name')
-                    if name:
-                        names.append(name)
-            return set(names)
-        return set()
+        return await self.client.fetch_online_players()
 
     def run(self):
         self.client.run(os.getenv('DISCORD_BOT_TOKEN'))

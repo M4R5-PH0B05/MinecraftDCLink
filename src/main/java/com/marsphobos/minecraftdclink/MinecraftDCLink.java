@@ -19,6 +19,7 @@ import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.ServerChatEvent;
 import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
@@ -42,6 +43,7 @@ public class MinecraftDCLink {
     private final FreezeManager freezeManager;
     private final RoleManager roleManager;
     private MinecraftServer server;
+    private long lastStatusMillis;
 
     public MinecraftDCLink() {
         dbExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -69,6 +71,7 @@ public class MinecraftDCLink {
         NeoForge.EVENT_BUS.addListener(this::onBlockPlace);
         NeoForge.EVENT_BUS.addListener(this::onPlayerDamage);
         NeoForge.EVENT_BUS.addListener(this::onChatMessage);
+        NeoForge.EVENT_BUS.addListener(this::onServerTick);
     }
 
     private void onServerStarted(ServerStartedEvent event) {
@@ -216,5 +219,21 @@ public class MinecraftDCLink {
             return;
         }
         event.setMessage(Component.literal("").append(prefix).append(event.getMessage()));
+    }
+
+    private void onServerTick(ServerTickEvent.Post event) {
+        if (server == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long intervalMs = FileConfig.statusIntervalSeconds * 1000L;
+        if (now - lastStatusMillis < intervalMs) {
+            return;
+        }
+        lastStatusMillis = now;
+        long dayTime = server.overworld().getDayTime();
+        long day = dayTime / 24000L;
+        long timeOfDay = dayTime % 24000L;
+        dbExecutor.execute(() -> registrationClient.sendServerStatus(day, timeOfDay));
     }
 }

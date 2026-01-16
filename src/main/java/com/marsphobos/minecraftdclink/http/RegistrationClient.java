@@ -105,6 +105,43 @@ public class RegistrationClient {
         }
     }
 
+    public void sendServerStatus(long day, long timeOfDay) {
+        String baseUrl = FileConfig.apiBaseUrl;
+        if (baseUrl == null || baseUrl.isBlank()) {
+            logger.error("API base URL is not configured.");
+            return;
+        }
+        String normalized = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        String apiKey = FileConfig.apiKey;
+
+        URI uri;
+        try {
+            uri = new URI(normalized + "/v1/server-status");
+        } catch (URISyntaxException e) {
+            logger.error("Invalid API base URL: {}", baseUrl, e);
+            return;
+        }
+
+        String payload = "{\"day\":" + day + ",\"time\":" + timeOfDay + "}";
+        HttpRequest.Builder requestBuilder = HttpRequest.newBuilder(uri)
+                .timeout(Duration.ofSeconds(FileConfig.apiTimeoutSeconds))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(payload));
+        if (apiKey != null && !apiKey.isBlank()) {
+            requestBuilder.header("X-API-Key", apiKey);
+        }
+
+        try {
+            HttpResponse<String> response = client.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                logger.warn("Server status post failed with status {}", response.statusCode());
+            }
+        } catch (IOException | InterruptedException e) {
+            logger.error("Server status post failed", e);
+            Thread.currentThread().interrupt();
+        }
+    }
+
     public RoleInfo getRoleInfo(UUID playerId) {
         String baseUrl = FileConfig.apiBaseUrl;
         if (baseUrl == null || baseUrl.isBlank()) {
