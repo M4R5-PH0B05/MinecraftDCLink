@@ -7,7 +7,6 @@ from discord import app_commands
 from dotenv import load_dotenv
 import aiohttp
 from aiohttp import web
-import socket
 
 # ENV VARIABLES
 load_dotenv()
@@ -214,6 +213,7 @@ class RegistrationBot:
         self.client = MCRegistrationClient(intents=intents)
         self.query_host = os.getenv('MC_QUERY_HOST', '127.0.0.1')
         self.query_port = int(os.getenv('MC_QUERY_PORT', '25565'))
+        self.status_url = os.getenv('MC_STATUS_URL', '').strip()
         self.setup_commands()
 
     def setup_commands(self):
@@ -359,34 +359,33 @@ class RegistrationBot:
                 return str(uuid.UUID(raw_uuid))
 
     async def fetch_online_players(self):
-        return await asyncio.to_thread(self._query_online_players)
+        if self.status_url:
+            url = self.status_url
+        else:
+            url = f"https://api.mcstatus.io/v2/status/java/{self.query_host}:{self.query_port}"
 
-    def _query_online_players(self):
         try:
-            session_id = b'\x01\x02\x03\x04'
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.settimeout(3)
-                # Handshake
-                sock.sendto(b'\xFE\xFD\x09' + session_id, (self.query_host, self.query_port))
-                data, _ = sock.recvfrom(4096)
-                if len(data) < 5 or data[0] != 0x09:
-                    return None
-                challenge_token = data[5:].split(b'\x00')[0]
-                # Full stat request
-                sock.sendto(b'\xFE\xFD\x00' + session_id + challenge_token + b'\x00\x00\x00\x00',
-                            (self.query_host, self.query_port))
-                data, _ = sock.recvfrom(65535)
-                if len(data) < 5 or data[0] != 0x00:
-                    return None
-                payload = data[5:]
-                parts = payload.split(b'\x00\x00\x01player_\x00\x00')
-                if len(parts) != 2:
-                    return None
-                player_section = parts[1]
-                players = [p.decode('utf-8', errors='ignore') for p in player_section.split(b'\x00') if p]
-                return set(players)
-        except (socket.timeout, OSError):
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=5) as response:
+                    if response.status != 200:
+                        return None
+                    data = await response.json()
+        except Exception:
             return None
+
+        players = data.get('players', {})
+        raw_list = players.get('list', [])
+        if isinstance(raw_list, list):
+            names = []
+            for entry in raw_list:
+                if isinstance(entry, str):
+                    names.append(entry)
+                elif isinstance(entry, dict):
+                    name = entry.get('name_raw') or entry.get('name_clean') or entry.get('name')
+                    if name:
+                        names.append(name)
+            return set(names)
+        return set()
 
     def run(self):
         self.client.run(os.getenv('DISCORD_BOT_TOKEN'))
