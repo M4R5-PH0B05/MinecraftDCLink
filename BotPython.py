@@ -245,19 +245,20 @@ class MCRegistrationClient(discord.Client):
 
         embed = discord.Embed(
             title="Minecraft Server Panel",
+            description="Live server snapshot",
             color=discord.Color.blurple(),
             timestamp=discord.utils.utcnow()
         )
-        online_count = status.get('online', len(online_names))
+        online_count = len(online_names) if online_names else status.get('online', 0)
         max_players = status.get('max', 0)
         ping = status.get('ping', None)
 
         if max_players:
-            embed.add_field(name="Players", value=f"{online_count}/{max_players}", inline=True)
+            embed.add_field(name="Players", value=f"👥 {online_count}/{max_players}", inline=True)
         else:
-            embed.add_field(name="Players", value=str(online_count), inline=True)
+            embed.add_field(name="Players", value=f"👥 {online_count}", inline=True)
         if ping is not None:
-            embed.add_field(name="Ping", value=f"{ping} ms", inline=True)
+            embed.add_field(name="Ping", value=f"📶 {ping} ms", inline=True)
 
         day = self.last_server_status.get('day')
         time_of_day = self.last_server_status.get('time')
@@ -265,18 +266,18 @@ class MCRegistrationClient(discord.Client):
             hour = ((time_of_day + 6000) % 24000) / 1000.0
             hours = int(hour)
             minutes = int((hour - hours) * 60)
-            embed.add_field(name="Game Time", value=f"Day {day}, {hours:02d}:{minutes:02d}", inline=True)
+            embed.add_field(name="Game Time", value=f"🗓️ Day {day}, ⏱️ {hours:02d}:{minutes:02d}", inline=True)
         else:
-            embed.add_field(name="Game Time", value="Unknown", inline=True)
+            embed.add_field(name="Game Time", value="🗓️ Unknown", inline=True)
 
         if online_names:
             names_list = sorted(online_names)
-            players_value = ", ".join(names_list)
+            players_value = ", ".join([f"🟢 {name}" for name in names_list])
             if len(players_value) > 1000:
                 players_value = players_value[:1000] + "..."
             embed.add_field(name="Online Players", value=players_value, inline=False)
         else:
-            embed.add_field(name="Online Players", value="None", inline=False)
+            embed.add_field(name="Online Players", value="🔴 None", inline=False)
 
         message = None
         if self.panel_message_id:
