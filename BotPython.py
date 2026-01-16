@@ -665,7 +665,9 @@ class RegistrationBot:
             playtime_ticks = self._parse_last_int(play_resp)
             deaths = self._parse_last_int(death_resp)
 
-            if level is None or playtime_ticks is None or deaths is None:
+            if deaths is None:
+                deaths = 0
+            if level is None or playtime_ticks is None:
                 return None
 
             return {
