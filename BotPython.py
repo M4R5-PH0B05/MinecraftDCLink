@@ -31,6 +31,10 @@ class MCRegistrationClient(discord.Client):
         self.last_server_status = {'ping': None, 'version': None}
         self.panel_task = None
         self.server_address = ""
+        self.rcon_host = ""
+        self.rcon_port = 25575
+        self.rcon_password = ""
+        self.profile_task = None
 
     # CONNECT TO DB
     async def setup_hook(self):
@@ -49,6 +53,15 @@ class MCRegistrationClient(discord.Client):
                     discord_id BIGINT UNIQUE,
                     current_username VARCHAR(255) NOT NULL,
                     registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS profiles (
+                    minecraft_uuid VARCHAR(36) PRIMARY KEY,
+                    level INT NOT NULL,
+                    playtime_seconds BIGINT NOT NULL,
+                    deaths INT NOT NULL,
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
 
@@ -70,6 +83,7 @@ class MCRegistrationClient(discord.Client):
         print("Synced Slash Commands.")
 
         self.panel_task = asyncio.create_task(self.panel_loop())
+        self.profile_task = asyncio.create_task(self.profile_refresh_loop())
 
     async def start_api_server(self):
         api_key = os.getenv('MC_AUTH_API_KEY', '')
@@ -399,7 +413,88 @@ class MCRegistrationClient(discord.Client):
             await self.api_runner.cleanup()
         if self.panel_task:
             self.panel_task.cancel()
+        if self.profile_task:
+            self.profile_task.cancel()
         await super().close()
+
+    async def profile_refresh_loop(self):
+        while True:
+            try:
+                await self.refresh_online_profiles()
+            except Exception:
+                pass
+            await asyncio.sleep(600)
+
+    async def refresh_online_profiles(self):
+        if not self.rcon_host or not self.rcon_password:
+            return
+        if not self.online_players:
+            return
+
+        async with self.pool.acquire() as conn:
+            for name in list(self.online_players):
+                stats = await self.fetch_profile_via_rcon(name)
+                if stats is None:
+                    continue
+                user_row = await conn.fetchrow(
+                    'SELECT minecraft_uuid FROM users WHERE current_username = $1',
+                    name
+                )
+                if not user_row:
+                    continue
+                minecraft_uuid = user_row['minecraft_uuid']
+                await conn.execute('''
+                    INSERT INTO profiles (minecraft_uuid, level, playtime_seconds, deaths, last_updated)
+                    VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                    ON CONFLICT (minecraft_uuid) DO UPDATE SET
+                        level = EXCLUDED.level,
+                        playtime_seconds = EXCLUDED.playtime_seconds,
+                        deaths = EXCLUDED.deaths,
+                        last_updated = CURRENT_TIMESTAMP
+                ''', minecraft_uuid, stats['level'], stats['playtime_seconds'], stats['deaths'])
+
+    async def fetch_profile_via_rcon(self, player_name: str):
+        return await asyncio.to_thread(self._fetch_profile_via_rcon_sync, player_name)
+
+    def _fetch_profile_via_rcon_sync(self, player_name: str):
+        try:
+            client = RCONClient(self.rcon_host, port=self.rcon_port)
+            if not client.login(self.rcon_password):
+                return None
+
+            client.command("scoreboard objectives add dclink_playtime minecraft.custom:minecraft.play_time")
+            client.command("scoreboard objectives add dclink_deaths minecraft.custom:minecraft.deaths")
+
+            level_resp = client.command(f"experience query {player_name} levels")
+            play_resp = client.command(f"scoreboard players get {player_name} dclink_playtime")
+            death_resp = client.command(f"scoreboard players get {player_name} dclink_deaths")
+
+            level = self._parse_last_int(level_resp)
+            playtime_ticks = self._parse_last_int(play_resp)
+            deaths = self._parse_last_int(death_resp)
+
+            if deaths is None:
+                deaths = 0
+            if level is None or playtime_ticks is None:
+                return None
+
+            return {
+                'level': level,
+                'playtime_seconds': playtime_ticks // 20,
+                'deaths': deaths,
+                'last_updated': discord.utils.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+            }
+        except Exception:
+            return None
+
+    def _parse_last_int(self, text: str):
+        if not text:
+            return None
+        parts = text.strip().split()
+        for part in reversed(parts):
+            if part.isdigit():
+                return int(part)
+        return None
 
 # MAIN BOT
 class RegistrationBot:
@@ -416,9 +511,9 @@ class RegistrationBot:
         self.client.query_port = int(os.getenv('MC_QUERY_PORT', '25565'))
         self.client.status_url = os.getenv('MC_STATUS_URL', '').strip()
         self.client.server_address = os.getenv('MC_SERVER_ADDRESS', '').strip()
-        self.rcon_host = os.getenv('RCON_HOST', '')
-        self.rcon_port = int(os.getenv('RCON_PORT', '25575'))
-        self.rcon_password = os.getenv('RCON_PASSWORD', '')
+        self.client.rcon_host = os.getenv('RCON_HOST', '')
+        self.client.rcon_port = int(os.getenv('RCON_PORT', '25575'))
+        self.client.rcon_password = os.getenv('RCON_PASSWORD', '')
         self.setup_commands()
 
     def setup_commands(self):
@@ -509,7 +604,7 @@ class RegistrationBot:
                             description=f"Linked `{minecraft_name}`. You can now join the server.",
                             color=discord.Color.green()
                         )
-                        embed.set_thumbnail(url=f"https://crafatar.com/avatars/{parsed_uuid}?size=64&overlay")
+                        embed.set_thumbnail(url=f"https://mc-heads.net/avatar/{parsed_uuid}/64")
                         await interaction.followup.send(embed=embed, ephemeral=True)
 
                         if interaction.guild and isinstance(interaction.user, discord.Member):
@@ -594,25 +689,50 @@ class RegistrationBot:
                 minecraft_uuid = user_row['minecraft_uuid']
                 display_name = user_row['current_username']
 
-            if not self.rcon_host or not self.rcon_password:
+            if not self.client.rcon_host or not self.client.rcon_password:
                 await interaction.followup.send(
                     "RCON is not configured. Please contact an admin.",
                     ephemeral=True
                 )
                 return
 
-            stats = await self.fetch_profile_via_rcon(display_name)
-            if stats is None:
-                await interaction.followup.send(
-                    "Could not fetch live stats. Make sure you are online and try again.",
-                    ephemeral=True
-                )
-                return
+            stats = await self.client.fetch_profile_via_rcon(display_name)
+            cache_row = None
 
-            level = stats['level']
-            playtime_seconds = stats['playtime_seconds']
-            deaths = stats['deaths']
-            last_updated = stats['last_updated']
+            if stats is not None:
+                level = stats['level']
+                playtime_seconds = stats['playtime_seconds']
+                deaths = stats['deaths']
+                last_updated = stats['last_updated']
+
+                async with self.client.pool.acquire() as conn:
+                    await conn.execute('''
+                        INSERT INTO profiles (minecraft_uuid, level, playtime_seconds, deaths, last_updated)
+                        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                        ON CONFLICT (minecraft_uuid) DO UPDATE SET
+                            level = EXCLUDED.level,
+                            playtime_seconds = EXCLUDED.playtime_seconds,
+                            deaths = EXCLUDED.deaths,
+                            last_updated = CURRENT_TIMESTAMP
+                    ''', minecraft_uuid, level, playtime_seconds, deaths)
+            else:
+                async with self.client.pool.acquire() as conn:
+                    cache_row = await conn.fetchrow(
+                        'SELECT level, playtime_seconds, deaths, last_updated FROM profiles WHERE minecraft_uuid = $1',
+                        minecraft_uuid
+                    )
+
+                if not cache_row:
+                    await interaction.followup.send(
+                        "Could not fetch live stats and no cache exists yet. Join the server once to create a cache.",
+                        ephemeral=True
+                    )
+                    return
+
+                level = cache_row['level']
+                playtime_seconds = cache_row['playtime_seconds']
+                deaths = cache_row['deaths']
+                last_updated = cache_row['last_updated']
 
             hours = playtime_seconds // 3600
             minutes = (playtime_seconds % 3600) // 60
@@ -620,9 +740,9 @@ class RegistrationBot:
             embed = discord.Embed(
                 title=f"{display_name}'s Profile",
                 color=discord.Color.orange(),
-                description="Live stats fetched from the server."
+                description="Live stats fetched from the server." if stats is not None else "Offline stats from cache."
             )
-            embed.set_thumbnail(url=f"https://crafatar.com/avatars/{minecraft_uuid}?size=64&overlay")
+            embed.set_thumbnail(url=f"https://mc-heads.net/avatar/{minecraft_uuid}/64")
             embed.add_field(name="Level", value=str(level), inline=True)
             embed.add_field(name="Playtime", value=f"{hours}h {minutes}m", inline=True)
             embed.add_field(name="Deaths", value=str(deaths), inline=True)
@@ -645,48 +765,6 @@ class RegistrationBot:
     async def fetch_online_players(self):
         return await self.client.fetch_online_players()
 
-    async def fetch_profile_via_rcon(self, player_name: str):
-        return await asyncio.to_thread(self._fetch_profile_via_rcon_sync, player_name)
-
-    def _fetch_profile_via_rcon_sync(self, player_name: str):
-        try:
-            client = RCONClient(self.rcon_host, port=self.rcon_port)
-            if not client.login(self.rcon_password):
-                return None
-
-            client.command("scoreboard objectives add dclink_playtime minecraft.custom:minecraft.play_time")
-            client.command("scoreboard objectives add dclink_deaths minecraft.custom:minecraft.deaths")
-
-            level_resp = client.command(f"experience query {player_name} levels")
-            play_resp = client.command(f"scoreboard players get {player_name} dclink_playtime")
-            death_resp = client.command(f"scoreboard players get {player_name} dclink_deaths")
-
-            level = self._parse_last_int(level_resp)
-            playtime_ticks = self._parse_last_int(play_resp)
-            deaths = self._parse_last_int(death_resp)
-
-            if deaths is None:
-                deaths = 0
-            if level is None or playtime_ticks is None:
-                return None
-
-            return {
-                'level': level,
-                'playtime_seconds': playtime_ticks // 20,
-                'deaths': deaths,
-                'last_updated': discord.utils.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
-            }
-        except Exception:
-            return None
-
-    def _parse_last_int(self, text: str):
-        if not text:
-            return None
-        parts = text.strip().split()
-        for part in reversed(parts):
-            if part.isdigit():
-                return int(part)
-        return None
 
     def run(self):
         self.client.run(os.getenv('DISCORD_BOT_TOKEN'))
