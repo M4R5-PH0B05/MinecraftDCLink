@@ -292,6 +292,7 @@ class MCRegistrationClient(discord.Client):
             embed.add_field(name="Ping", value=f"📶 {ping} ms", inline=True)
         if self.server_address:
             embed.add_field(name="Server IP", value=f"🔗 {self.server_address}", inline=True)
+        embed.add_field(name="Website", value="🌐 https://mc.marsphobos.com/", inline=True)
 
         day = self.last_server_status.get('day')
         time_of_day = self.last_server_status.get('time')

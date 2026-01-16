@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Create Perfect World SMP</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fi onts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;500;600;700&family=Manrope:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="topbar">
+        <div class="topbar__brand">
+          <img src="638598725500886388.png" alt="Server icon" />
+          <span>Create Perfect World SMP</span>
+        </div>
+        <nav class="topbar__nav">
+          <a href="#join">Server</a>
+          <a href="#overview">Modpack</a>
+          <a href="#rules">Rules</a>
+        </nav>
+      </header>
+      <section class="hero">
+        <div class="hero__overlay"></div>
+        <div class="hero__content">
+          <div class="hero__panel">
+            <div class="brand">
+              <img class="brand__icon" src="638598725500886388.png" alt="Server icon" />
+              <div class="brand__text">
+                <p class="brand__label">NeoForge 1.21.1</p>
+                <h1>Create Perfect World SMP</h1>
+              </div>
+            </div>
+
+            <p class="hero__tagline">
+              A Create 6.0 focused, Vanilla+ survival experience with a strong playerbase, clear rules, and active staff.
+            </p>
+
+            <div class="hero__stats">
+              <div class="hero__stat">
+                <span>Mod Count</span>
+                <strong>103</strong>
+              </div>
+              <div class="hero__stat">
+                <span>Server IP</span>
+                <strong>144.34.87.148:25565</strong>
+              </div>
+              <div class="hero__stat">
+                <span>RAM Allocation</span>
+                <strong>8+ GB</strong>
+              </div>
+            </div>
+
+            <div class="hero__actions">
+              <a class="btn btn--primary" href="#join">Join Discord</a>
+              <a class="btn btn--ghost" href="#overview">Modpack Overview</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid" id="join">
+        <article class="card card--glow">
+          <h2>Server Details</h2>
+          <p>
+            Access is managed through Discord. Verify your account to unlock full access and support.
+          </p>
+          <div class="stat">
+            <span class="stat__label">Server IP</span>
+            <span class="stat__value">144.34.87.148:25565</span>
+          </div>
+          </div>
+          <div class="stat">
+            <span class="stat__label">Platform</span>
+            <span class="stat__value">Java Edition</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">RAM Allocation</span>
+            <span class="stat__value">8+ GB recommended</span>
+          </div>
+        </article>
+
+        <article class="card">
+          <h2>Modpack Info</h2>
+          <p class="muted">CurseForge release details.</p>
+          <div class="stat">
+            <span class="stat__label">Game Version</span>
+            <span class="stat__value">1.21.1</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">Modloader</span>
+            <span class="stat__value">NeoForge - 21.1.209</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">Latest Release</span>
+            <span class="stat__value">12/17/2025</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">Pack Focus</span>
+            <span class="stat__value">Create 6.0</span>
+          </div>
+        </article>
+
+        <article class="card">
+          <h2>Primary Mods</h2>
+          <ul class="tag-list">
+            <li>Create</li>
+            <li>Create: Stuff and Additions</li>
+            <li>Create: Enchantment Industries</li>
+            <li>Create: Copycats+</li>
+            <li>Farmers Delight</li>
+            <li>Macaw's Bridges, Trapdoors and Doors</li>
+            <li>Sophisticated Backpacks</li>
+            <li>JEI</li>
+            <li>Storage Drawers</li>
+            <li>Performance optimizations</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <h2>Live Status</h2>
+          <div class="stat">
+            <span class="stat__label">Players</span>
+            <span class="stat__value" id="stat-players">Loading...</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">Game Time</span>
+            <span class="stat__value" id="stat-time">Loading...</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">Online Players</span>
+            <span class="stat__value" id="stat-list">Loading...</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">Last Updated</span>
+            <span class="stat__value" id="stat-updated">Loading...</span>
+          </div>
+          <p class="muted stat__note">Live data from the server panel API.</p>
+        </article>
+      </section>
+
+      <section class="overview" id="overview">
+        <div class="overview__content">
+          <h2>Modpack Overview</h2>
+          <p>
+            This is an updated lightweight, Create 6.0 focused modpack for Minecraft 1.21.1 put together by
+            MrBeardstone. It is the official pack used in the Create: Perfect World - Post Production YouTube series.
+            The pack is designed to create a Vanilla+ experience centered on Create and a fully immersive world, with
+            quality of life mods for inventory, storage, villages, food, and more while keeping a vanilla style of play.
+          </p>
+        </div>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <h2>Discord</h2>
+          <p>Join the server for verification, support, and announcements.</p>
+          <div class="discord-widget">
+            <iframe
+              src="https://ptb.discord.com/widget?id=1461456941367693529&theme=dark"
+              width="350"
+              height="500"
+              allowtransparency="true"
+              frameborder="0"
+              sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
+            ></iframe>
+          </div>
+        </article>
+        <article class="card">
+          <h2 id="rules">Server Rules</h2>
+          <ol class="rules-list">
+            <li>Be respectful. No harassment, hate speech, slurs, or excessive toxicity.</li>
+            <li>No griefing or stealing. Do not destroy builds, take items, or modify areas without permission.</li>
+            <li>No cheating or exploiting. Hacks, x-ray, dupes, or glitch abuse are not allowed.</li>
+            <li>Keep chat appropriate. No spamming, advertising, or excessive swearing.</li>
+            <li>Respect builds and land claims. Do not build too close to others or inside claimed areas.</li>
+            <li>PvP only by agreement. No random killing without consent.</li>
+            <li>Use common sense. If it harms the experience, do not do it.</li>
+            <li>Follow staff instructions. Staff decisions are final; handle disputes in DMs.</li>
+            <li>Have fun.</li>
+          </ol>
+        </article>
+      </section>
+
+      <section class="cta">
+        <div class="cta__content">
+          <h2>Need help getting set up?</h2>
+          <p>Check the Discord help channel for install and RAM allocation guidance.</p>
+        </div>
+        <a class="btn btn--primary" href="#join">View Server Details</a>
+      </section>
+    </main>
+    <script>
+      const STATUS_ENDPOINT = "https://mc-auth.marsphobos.com/v1/web-status";
+      const MCSTATUS_ENDPOINT = "https://api.mcstatus.io/v2/status/java/144.34.87.148:25565";
+
+      function formatGameTime(day, timeOfDay) {
+        if (typeof day !== "number" || typeof timeOfDay !== "number") {
+          return "Unknown";
+        }
+        const hour = ((timeOfDay + 6000) % 24000) / 1000;
+        const hours = Math.floor(hour);
+        const minutes = Math.floor((hour - hours) * 60);
+        return `Day ${day}, ${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+      }
+
+      function updatePanel(data, mcstatus) {
+        const names = data.players?.list ?? [];
+        const players = names.length ? names.length : data.players?.online ?? 0;
+        const max = mcstatus?.players?.max ?? data.players?.max ?? 0;
+        const latency =
+          typeof mcstatus?.latency === "number"
+            ? mcstatus.latency
+            : typeof data.latency === "number"
+            ? data.latency
+            : null;
+        const version =
+          mcstatus?.version?.name_clean ??
+          mcstatus?.version?.name ??
+          data.version ??
+          "Unknown";
+
+        document.getElementById("stat-players").textContent =
+          max ? `${players}/${max}` : `${players}`;
+        document.getElementById("stat-latency").textContent =
+          latency === null ? "Unknown" : `${latency} ms`;
+        document.getElementById("stat-version").textContent = version;
+        document.getElementById("stat-time").textContent = formatGameTime(
+          data.day,
+          data.time
+        );
+        document.getElementById("stat-updated").textContent = new Date().toLocaleTimeString();
+
+        const list = document.getElementById("stat-list");
+        if (names.length) {
+          list.textContent = names.join(", ");
+        } else {
+          list.textContent = "None";
+        }
+      }
+
+      async function fetchStatus() {
+        try {
+          const [statusRes, mcRes] = await Promise.all([
+            fetch(STATUS_ENDPOINT),
+            fetch(MCSTATUS_ENDPOINT),
+          ]);
+          if (!statusRes.ok) {
+            throw new Error("Status fetch failed");
+          }
+          const data = await statusRes.json();
+          const mcstatus = mcRes.ok ? await mcRes.json() : null;
+          updatePanel(data, mcstatus);
+        } catch {
+          document.getElementById("stat-players").textContent = "Unavailable";
+          document.getElementById("stat-latency").textContent = "Unavailable";
+          document.getElementById("stat-version").textContent = "Unavailable";
+          document.getElementById("stat-time").textContent = "Unknown";
+          document.getElementById("stat-list").textContent = "Unavailable";
+          document.getElementById("stat-updated").textContent = "Unavailable";
+        }
+      }
+
+      fetchStatus();
+      setInterval(fetchStatus, 30000);
+    </script>
+  </body>
+</html>
