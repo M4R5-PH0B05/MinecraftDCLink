@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MarsPhobos SMP</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Newsreader:opsz,wght@6..72,300;6..72,500;6..72,700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <div class="hero__overlay"></div>
+        <div class="hero__content">
+          <div class="brand">
+            <img class="brand__icon" src="638598725500886388.png" alt="Server icon" />
+            <div class="brand__text">
+              <p class="brand__label">NeoForge 1.21.1</p>
+              <h1>MarsPhobos SMP</h1>
+            </div>
+          </div>
+
+          <p class="hero__tagline">
+            A focused survival world with real progression, tight moderation, and a Discord-first community.
+          </p>
+
+          <div class="hero__actions">
+            <a class="btn btn--primary" href="#join">Join Now</a>
+            <a class="btn btn--ghost" href="#rules">Rules & Info</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid" id="join">
+        <article class="card card--glow">
+          <h2>Join the Realm</h2>
+          <p>
+            Link your account in Discord to unlock full access. New arrivals are guided in-game until verified.
+          </p>
+          <div class="stat">
+            <span class="stat__label">Server IP</span>
+            <span class="stat__value">144.34.87.148:25565</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">Discord</span>
+            <span class="stat__value">discord.gg/marsphobos</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">Platform</span>
+            <span class="stat__value">Java Edition</span>
+          </div>
+        </article>
+
+        <article class="card">
+          <h2>Live Status</h2>
+          <p class="muted">Updated on page load.</p>
+          <div class="stat">
+            <span class="stat__label">Players</span>
+            <span class="stat__value" id="stat-players">Loading...</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">Latency</span>
+            <span class="stat__value" id="stat-latency">Loading...</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">Version</span>
+            <span class="stat__value" id="stat-version">Loading...</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">Game Time</span>
+            <span class="stat__value" id="stat-time">Loading...</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">Online Players</span>
+            <span class="stat__value" id="stat-list">Loading...</span>
+          </div>
+          <div class="stat">
+            <span class="stat__label">Last Updated</span>
+            <span class="stat__value" id="stat-updated">Loading...</span>
+          </div>
+          <p class="muted stat__note">Live data from the server panel API.</p>
+        </article>
+      </section>
+
+      <section class="panel" id="rules">
+        <div class="panel__media">
+          <img src="Create-Mod-1.jpg" alt="Server banner" />
+        </div>
+        <div class="panel__content">
+          <h2>Start Clean. Stay Sharp.</h2>
+          <p>
+            Respect builds, avoid griefing, and keep voice chat civil. We keep the world smooth and the rules short.
+          </p>
+          <div class="rules">
+            <span>01. No griefing or theft.</span>
+            <span>02. No x-ray or unfair mods.</span>
+            <span>03. Be respectful in chat and VC.</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <h2>Discord HQ</h2>
+          <p>Hop in and register to unlock full access.</p>
+          <div class="discord-widget">
+            <iframe
+              src="https://ptb.discord.com/widget?id=1461456941367693529&theme=dark"
+              width="350"
+              height="500"
+              allowtransparency="true"
+              frameborder="0"
+              sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
+            ></iframe>
+          </div>
+        </article>
+        <article class="card">
+          <h2>What to Expect</h2>
+          <ul class="list">
+            <li>Seasonal economy with curated events.</li>
+            <li>Hard-mode survival, no pay-to-win.</li>
+            <li>Active staff and a living world map.</li>
+            <li>Discord roles reflected in-game.</li>
+          </ul>
+        </article>
+      </section>
+
+      <section class="cta">
+        <div class="cta__content">
+          <h2>Ready to lock in?</h2>
+          <p>Jump in, register in Discord, and start building your story.</p>
+        </div>
+        <a class="btn btn--primary" href="#join">Copy IP</a>
+      </section>
+    </main>
+    <script>
+      const STATUS_ENDPOINT = "https://mc-auth.marsphobos.com/v1/web-status";
+
+      function formatGameTime(day, timeOfDay) {
+        if (typeof day !== "number" || typeof timeOfDay !== "number") {
+          return "Unknown";
+        }
+        const hour = ((timeOfDay + 6000) % 24000) / 1000;
+        const hours = Math.floor(hour);
+        const minutes = Math.floor((hour - hours) * 60);
+        return `Day ${day}, ${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+      }
+
+      function updatePanel(data) {
+        const players = data.players?.online ?? 0;
+        const max = data.players?.max ?? 0;
+        const latency = data.latency ?? "—";
+        const version = data.version ?? "Unknown";
+        const names = data.players?.list ?? [];
+
+        document.getElementById("stat-players").textContent =
+          max ? `${players}/${max}` : `${players}`;
+        document.getElementById("stat-latency").textContent =
+          latency === "—" ? "—" : `${latency} ms`;
+        document.getElementById("stat-version").textContent = version;
+        document.getElementById("stat-time").textContent = formatGameTime(
+          data.day,
+          data.time
+        );
+        document.getElementById("stat-updated").textContent = new Date().toLocaleTimeString();
+
+        const list = document.getElementById("stat-list");
+        if (names.length) {
+          list.textContent = names.map((name) => `🟢 ${name}`).join(", ");
+        } else {
+          list.textContent = "🔴 None";
+        }
+      }
+
+      async function fetchStatus() {
+        try {
+          const res = await fetch(STATUS_ENDPOINT);
+          if (!res.ok) {
+            throw new Error("Status fetch failed");
+          }
+          const data = await res.json();
+          updatePanel(data);
+        } catch {
+          document.getElementById("stat-players").textContent = "Unavailable";
+          document.getElementById("stat-latency").textContent = "Unavailable";
+          document.getElementById("stat-version").textContent = "Unavailable";
+          document.getElementById("stat-time").textContent = "Unknown";
+          document.getElementById("stat-list").textContent = "Unavailable";
+          document.getElementById("stat-updated").textContent = "Unavailable";
+        }
+      }
+
+      fetchStatus();
+      setInterval(fetchStatus, 30000);
+    </script>
+  </body>
+</html>

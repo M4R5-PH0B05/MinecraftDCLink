@@ -82,6 +82,7 @@ class MCRegistrationClient(discord.Client):
         app.router.add_post('/v1/mc-event', self.handle_mc_event)
         app.router.add_get('/v1/role/{minecraft_uuid}', self.handle_role_info)
         app.router.add_post('/v1/server-status', self.handle_server_status)
+        app.router.add_get('/v1/web-status', self.handle_web_status)
 
         runner = web.AppRunner(app)
         await runner.setup()
@@ -195,6 +196,26 @@ class MCRegistrationClient(discord.Client):
 
         top_role = max(roles, key=lambda r: r.position)
         return web.json_response({'ok': True, 'role': top_role.name, 'color': top_role.color.value})
+
+    async def handle_web_status(self, request: web.Request):
+        status = await self.fetch_server_status()
+        online_names = self.online_players
+        day = self.last_server_status.get('day')
+        time_of_day = self.last_server_status.get('time')
+
+        payload = {
+            'ok': True,
+            'players': {
+                'online': status.get('online', len(online_names)),
+                'max': status.get('max', 0),
+                'list': sorted(online_names),
+            },
+            'latency': status.get('ping'),
+            'version': status.get('version'),
+            'day': day,
+            'time': time_of_day,
+        }
+        return web.json_response(payload, headers={'Access-Control-Allow-Origin': '*'})
 
     async def handle_server_status(self, request: web.Request):
         api_key = request.app['api_key']
@@ -347,7 +368,9 @@ class MCRegistrationClient(discord.Client):
         online = players.get('online', 0)
         max_players = players.get('max', 0)
         ping = data.get('latency')
-        return {'online': online, 'max': max_players, 'ping': ping}
+        version = data.get('version', {})
+        version_name = version.get('name_clean') or version.get('name')
+        return {'online': online, 'max': max_players, 'ping': ping, 'version': version_name}
 
     async def close(self):
         if self.api_runner:
