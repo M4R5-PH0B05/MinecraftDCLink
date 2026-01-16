@@ -292,7 +292,6 @@ class MCRegistrationClient(discord.Client):
             embed.add_field(name="Ping", value=f"📶 {ping} ms", inline=True)
         if self.server_address:
             embed.add_field(name="Server IP", value=f"🔗 {self.server_address}", inline=True)
-        embed.add_field(name="Website", value="🌐 https://mc.marsphobos.com/", inline=True)
 
         day = self.last_server_status.get('day')
         time_of_day = self.last_server_status.get('time')
@@ -322,12 +321,24 @@ class MCRegistrationClient(discord.Client):
             except discord.HTTPException:
                 message = None
 
+        view = self.build_website_view()
         if message is None:
-            message = await channel.send(embed=embed)
+            message = await channel.send(embed=embed, view=view)
             self.panel_message_id = message.id
             print(f"Panel message ID: {self.panel_message_id}")
         else:
-            await message.edit(embed=embed)
+            await message.edit(embed=embed, view=view)
+
+    def build_website_view(self):
+        view = discord.ui.View(timeout=None)
+        view.add_item(
+            discord.ui.Button(
+                label="Visit Website",
+                url="https://mc.marsphobos.com/",
+                style=discord.ButtonStyle.link,
+            )
+        )
+        return view
 
     async def fetch_online_players(self):
         if self.status_url:

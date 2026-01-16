@@ -104,10 +104,12 @@ public class FreezeManager {
         frozenPlayers.put(player.getUUID(), frozen);
     }
 
-    private void unfreeze(ServerPlayer player) {
+    private void unfreeze(ServerPlayer player, boolean announce) {
         frozenPlayers.remove(player.getUUID());
-        player.sendSystemMessage(Component.literal("Your account has been registered. You can move now.")
-                .withStyle(ChatFormatting.GREEN));
+        if (announce) {
+            player.sendSystemMessage(Component.literal("Your account has been registered. You can move now.")
+                    .withStyle(ChatFormatting.GREEN));
+        }
         if (onUnfreeze != null) {
             onUnfreeze.accept(player);
         }
@@ -131,7 +133,12 @@ public class FreezeManager {
                         return;
                     }
                     if (registered) {
-                        unfreeze(current);
+                        if (frozenPlayers.containsKey(playerId)) {
+                            unfreeze(current, true);
+                        } else {
+                            current.sendSystemMessage(Component.literal("Welcome back, " + current.getGameProfile().getName() + ".")
+                                    .withStyle(ChatFormatting.GREEN));
+                        }
                     } else {
                         if (frozenPlayers.get(playerId) == null) {
                             freeze(current);
