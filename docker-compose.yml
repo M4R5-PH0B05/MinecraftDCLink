@@ -1,9 +1,0 @@
-version: "3.8"
-
-services:
-  mc-dc-bot:
-    build: .
-    container_name: mc-dc-bot
-    restart: unless-stopped
-    ports:
-      - "9925:9925"

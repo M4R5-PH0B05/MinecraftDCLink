@@ -27,7 +27,7 @@ class MCRegistrationClient(discord.Client):
         self.query_port = 25565
         self.status_url = ""
         self.panel_message_id = None
-        self.last_server_status = {}
+        self.last_server_status = {'ping': None, 'version': None}
         self.panel_task = None
         self.server_address = ""
 
@@ -203,15 +203,22 @@ class MCRegistrationClient(discord.Client):
         day = self.last_server_status.get('day')
         time_of_day = self.last_server_status.get('time')
 
+        online_count = len(online_names) if online_names else status.get('online', 0)
+        ping = status.get('ping')
+        version = status.get('version')
+        if ping is not None:
+            self.last_server_status['ping'] = ping
+        if version:
+            self.last_server_status['version'] = version
         payload = {
             'ok': True,
             'players': {
-                'online': status.get('online', len(online_names)),
+                'online': online_count,
                 'max': status.get('max', 0),
                 'list': sorted(online_names),
             },
-            'latency': status.get('ping'),
-            'version': status.get('version'),
+            'latency': ping if ping is not None else self.last_server_status.get('ping'),
+            'version': version or self.last_server_status.get('version'),
             'day': day,
             'time': time_of_day,
         }
@@ -233,7 +240,8 @@ class MCRegistrationClient(discord.Client):
         if not isinstance(day, int) or not isinstance(time_of_day, int):
             return web.json_response({'ok': False, 'error': 'invalid_payload'}, status=400)
 
-        self.last_server_status = {'day': day, 'time': time_of_day}
+        self.last_server_status['day'] = day
+        self.last_server_status['time'] = time_of_day
         await self.update_panel()
         return web.json_response({'ok': True})
 
