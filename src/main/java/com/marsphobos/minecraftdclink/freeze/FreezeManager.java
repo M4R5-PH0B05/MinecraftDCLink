@@ -1,6 +1,6 @@
 package com.marsphobos.minecraftdclink.freeze;
 
-import com.marsphobos.minecraftdclink.config.ModConfigs;
+import com.marsphobos.minecraftdclink.config.FileConfig;
 import com.marsphobos.minecraftdclink.http.RegistrationClient;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
@@ -15,6 +15,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.function.Consumer;
 
 public class FreezeManager {
     private static final double TELEPORT_EPSILON_SQR = 0.0025D;
@@ -22,13 +23,15 @@ public class FreezeManager {
     private final Logger logger;
     private final RegistrationClient registrationClient;
     private final ExecutorService executor;
+    private final Consumer<ServerPlayer> onUnfreeze;
     private final Map<UUID, FrozenPlayer> frozenPlayers = new ConcurrentHashMap<>();
     private MinecraftServer server;
 
-    public FreezeManager(Logger logger, RegistrationClient registrationClient, ExecutorService executor) {
+    public FreezeManager(Logger logger, RegistrationClient registrationClient, ExecutorService executor, Consumer<ServerPlayer> onUnfreeze) {
         this.logger = logger;
         this.registrationClient = registrationClient;
         this.executor = executor;
+        this.onUnfreeze = onUnfreeze;
     }
 
     public void setServer(MinecraftServer server) {
@@ -63,13 +66,13 @@ public class FreezeManager {
         player.fallDistance = 0.0F;
 
         long now = System.currentTimeMillis();
-        long checkIntervalMs = ModConfigs.CHECK_INTERVAL_SECONDS.get() * 1000L;
+        long checkIntervalMs = FileConfig.checkIntervalSeconds * 1000L;
         if (now - frozen.getLastCheckMillis() >= checkIntervalMs) {
             frozen.setLastCheckMillis(now);
             scheduleRegistrationCheck(player, false);
         }
 
-        long messageIntervalMs = ModConfigs.MESSAGE_INTERVAL_SECONDS.get() * 1000L;
+        long messageIntervalMs = FileConfig.messageIntervalSeconds * 1000L;
         if (now - frozen.getLastMessageMillis() >= messageIntervalMs) {
             frozen.setLastMessageMillis(now);
             sendInstruction(player);
@@ -105,10 +108,13 @@ public class FreezeManager {
         frozenPlayers.remove(player.getUUID());
         player.sendSystemMessage(Component.literal("Your account has been registered. You can move now.")
                 .withStyle(ChatFormatting.GREEN));
+        if (onUnfreeze != null) {
+            onUnfreeze.accept(player);
+        }
     }
 
     private void sendInstruction(ServerPlayer player) {
-        player.sendSystemMessage(Component.literal(ModConfigs.INSTRUCTION_MESSAGE.get())
+        player.sendSystemMessage(Component.literal(FileConfig.instructionMessage)
                 .withStyle(ChatFormatting.RED));
     }
 

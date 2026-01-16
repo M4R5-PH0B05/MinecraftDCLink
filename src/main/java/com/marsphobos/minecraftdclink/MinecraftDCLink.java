@@ -1,8 +1,9 @@
 package com.marsphobos.minecraftdclink;
 
-import com.marsphobos.minecraftdclink.config.ModConfigs;
+import com.marsphobos.minecraftdclink.config.FileConfig;
 import com.marsphobos.minecraftdclink.freeze.FreezeManager;
 import com.marsphobos.minecraftdclink.http.RegistrationClient;
+import com.marsphobos.minecraftdclink.roles.RoleManager;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import net.minecraft.ChatFormatting;
@@ -13,13 +14,11 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.neoforged.fml.ModLoadingContext;
 import net.neoforged.fml.common.Mod;
-import net.neoforged.fml.config.ModConfig;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
-import net.neoforged.neoforge.event.TickEvent;
-import net.neoforged.neoforge.event.entity.living.LivingHurtEvent;
+import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
+import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 import net.neoforged.neoforge.event.level.BlockEvent;
@@ -40,11 +39,10 @@ public class MinecraftDCLink {
     private final ExecutorService dbExecutor;
     private final RegistrationClient registrationClient;
     private final FreezeManager freezeManager;
+    private final RoleManager roleManager;
     private MinecraftServer server;
 
     public MinecraftDCLink() {
-        ModLoadingContext.get().registerConfig(ModConfig.Type.SERVER, ModConfigs.SPEC);
-
         dbExecutor = Executors.newSingleThreadExecutor(r -> {
             Thread thread = new Thread(r);
             thread.setName("MinecraftDCLink-DB");
@@ -52,7 +50,8 @@ public class MinecraftDCLink {
             return thread;
         });
         registrationClient = new RegistrationClient(LOGGER);
-        freezeManager = new FreezeManager(LOGGER, registrationClient, dbExecutor);
+        roleManager = new RoleManager(LOGGER, registrationClient, dbExecutor);
+        freezeManager = new FreezeManager(LOGGER, registrationClient, dbExecutor, roleManager::scheduleUpdate);
 
         NeoForge.EVENT_BUS.addListener(this::onServerStarted);
         NeoForge.EVENT_BUS.addListener(this::onServerStopping);
@@ -72,7 +71,9 @@ public class MinecraftDCLink {
 
     private void onServerStarted(ServerStartedEvent event) {
         server = event.getServer();
+        FileConfig.load(LOGGER);
         freezeManager.setServer(server);
+        roleManager.setServer(server);
         LOGGER.info("MinecraftDCLink server started.");
     }
 
@@ -86,6 +87,10 @@ public class MinecraftDCLink {
             return;
         }
         freezeManager.handlePlayerJoin(player);
+        roleManager.scheduleUpdate(player);
+        String playerName = player.getGameProfile().getName();
+        UUID playerId = player.getUUID();
+        dbExecutor.execute(() -> registrationClient.sendPlayerEvent(playerId, playerName, "join"));
     }
 
     private void onPlayerQuit(PlayerEvent.PlayerLoggedOutEvent event) {
@@ -93,13 +98,13 @@ public class MinecraftDCLink {
             return;
         }
         freezeManager.handlePlayerQuit(player);
+        String playerName = player.getGameProfile().getName();
+        UUID playerId = player.getUUID();
+        dbExecutor.execute(() -> registrationClient.sendPlayerEvent(playerId, playerName, "leave"));
     }
 
-    private void onPlayerTick(TickEvent.PlayerTickEvent event) {
-        if (event.phase != TickEvent.Phase.END) {
-            return;
-        }
-        if (!(event.player instanceof ServerPlayer player)) {
+    private void onPlayerTick(PlayerTickEvent.Post event) {
+        if (!(event.getEntity() instanceof ServerPlayer player)) {
             return;
         }
         freezeManager.handlePlayerTick(player);
@@ -121,7 +126,7 @@ public class MinecraftDCLink {
                                             Component.literal("Click to copy UUID").withStyle(ChatFormatting.GREEN)
                                     )));
                     player.sendSystemMessage(uuidMessage);
-                    player.sendSystemMessage(Component.literal(ModConfigs.INSTRUCTION_MESSAGE.get())
+                    player.sendSystemMessage(Component.literal(FileConfig.instructionMessage)
                             .withStyle(ChatFormatting.GRAY));
 
                     return Command.SINGLE_SUCCESS;
@@ -193,12 +198,12 @@ public class MinecraftDCLink {
         }
     }
 
-    private void onPlayerDamage(LivingHurtEvent event) {
+    private void onPlayerDamage(LivingDamageEvent.Pre event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) {
             return;
         }
         if (freezeManager.isFrozen(player.getUUID())) {
-            event.setCanceled(true);
+            event.setNewDamage(0.0F);
         }
     }
 }
