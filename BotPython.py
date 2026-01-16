@@ -221,15 +221,18 @@ class RegistrationBot:
         @app_commands.describe(minecraft_name='Your Minecraft Account Name')
         async def link_minecraft(interaction: discord.Interaction, minecraft_name: str):
             try:
+                if not interaction.response.is_done():
+                    await interaction.response.defer(ephemeral=True)
+
                 online_players = await self.fetch_online_players()
                 if online_players is None:
-                    await interaction.response.send_message(
+                    await interaction.followup.send(
                         "Cannot check server status right now. Try again later.",
                         ephemeral=True
                     )
                     return
                 if minecraft_name not in online_players:
-                    await interaction.response.send_message(
+                    await interaction.followup.send(
                         f"`{minecraft_name}` is not online. Join the server first, then try again.",
                         ephemeral=True
                     )
@@ -237,7 +240,7 @@ class RegistrationBot:
 
                 minecraft_uuid = await self.resolve_uuid(minecraft_name)
                 if not minecraft_uuid:
-                    await interaction.response.send_message(
+                    await interaction.followup.send(
                         "Could not find that Minecraft name. Double-check spelling.",
                         ephemeral=True
                     )
@@ -245,7 +248,7 @@ class RegistrationBot:
                 parsed_uuid = uuid.UUID(minecraft_uuid)
 
                 if not self.client.pool:
-                    await interaction.response.send_message("Error connecting to DB.", ephemeral=True)
+                    await interaction.followup.send("Error connecting to DB.", ephemeral=True)
                     return
 
                 async with self.client.pool.acquire() as conn:
@@ -256,7 +259,7 @@ class RegistrationBot:
 
                         # Check if we've reached the maximum number of users
                         if current_user_count >= self.MAX_USERS:
-                            await interaction.response.send_message(
+                            await interaction.followup.send(
                                 f"Registration is full. Maximum of {self.MAX_USERS} users have already been registered.",
                                 ephemeral=True
                             )
@@ -269,7 +272,7 @@ class RegistrationBot:
                         )
 
                         if existing_user:
-                            await interaction.response.send_message(
+                            await interaction.followup.send(
                                 "Either your Discord account or this Minecraft account are already registered.",
                                 ephemeral=True
                             )
@@ -291,7 +294,7 @@ class RegistrationBot:
                             color=discord.Color.green()
                         )
                         embed.set_thumbnail(url=f"https://crafatar.com/avatars/{parsed_uuid}?size=64&overlay")
-                        await interaction.response.send_message(embed=embed, ephemeral=True)
+                        await interaction.followup.send(embed=embed, ephemeral=True)
 
                         if interaction.guild and isinstance(interaction.user, discord.Member):
                             try:
@@ -308,13 +311,13 @@ class RegistrationBot:
                                 )
 
                     except Exception as db_error:
-                        await interaction.response.send_message(
+                        await interaction.followup.send(
                             f"Registration failed: {str(db_error)}",
                             ephemeral=True
                         )
 
             except ValueError:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "Invalid UUID format. Please provide a valid minecraft UUID.",
                     ephemeral=True
                 )

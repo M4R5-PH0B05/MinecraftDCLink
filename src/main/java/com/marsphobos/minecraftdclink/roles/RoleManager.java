@@ -10,7 +10,9 @@ import net.minecraft.world.scores.PlayerTeam;
 import net.minecraft.world.scores.Scoreboard;
 import org.slf4j.Logger;
 
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 
 public class RoleManager {
@@ -18,6 +20,7 @@ public class RoleManager {
     private final Logger logger;
     private final RegistrationClient registrationClient;
     private final ExecutorService executor;
+    private final Map<UUID, RegistrationClient.RoleInfo> roleCache = new ConcurrentHashMap<>();
     private MinecraftServer server;
 
     public RoleManager(Logger logger, RegistrationClient registrationClient, ExecutorService executor) {
@@ -41,6 +44,18 @@ public class RoleManager {
         });
     }
 
+    public Component getPrefixComponent(UUID playerId) {
+        RegistrationClient.RoleInfo roleInfo = roleCache.get(playerId);
+        if (roleInfo == null || roleInfo.roleName().isBlank()) {
+            return null;
+        }
+        Style style = Style.EMPTY;
+        if (roleInfo.color() != 0) {
+            style = style.withColor(TextColor.fromRgb(roleInfo.color()));
+        }
+        return Component.literal("[" + roleInfo.roleName() + "] ").withStyle(style);
+    }
+
     private void applyRole(UUID playerId, RegistrationClient.RoleInfo roleInfo) {
         if (server == null) {
             return;
@@ -57,11 +72,10 @@ public class RoleManager {
         }
 
         if (roleInfo == null) {
-            player.setCustomName(null);
-            player.setCustomNameVisible(false);
-            player.setTabListDisplayName(null);
+            roleCache.remove(playerId);
             return;
         }
+        roleCache.put(playerId, roleInfo);
 
         String teamName = TEAM_PREFIX + Integer.toHexString(roleInfo.roleName().hashCode());
         PlayerTeam team = scoreboard.getPlayerTeam(teamName);
@@ -74,13 +88,8 @@ public class RoleManager {
         if (roleInfo.color() != 0) {
             style = style.withColor(TextColor.fromRgb(roleInfo.color()));
         }
-        team.setPrefix(Component.literal(prefixText).withStyle(style));
+        team.setPlayerPrefix(Component.literal(prefixText).withStyle(style));
 
         scoreboard.addPlayerToTeam(player.getScoreboardName(), team);
-
-        Component displayName = Component.literal(prefixText + player.getGameProfile().getName()).withStyle(style);
-        player.setCustomName(displayName);
-        player.setCustomNameVisible(true);
-        player.setTabListDisplayName(displayName);
     }
 }

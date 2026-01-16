@@ -17,6 +17,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
+import net.neoforged.neoforge.event.ServerChatEvent;
 import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
 import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
@@ -67,6 +68,7 @@ public class MinecraftDCLink {
         NeoForge.EVENT_BUS.addListener(this::onBlockBreak);
         NeoForge.EVENT_BUS.addListener(this::onBlockPlace);
         NeoForge.EVENT_BUS.addListener(this::onPlayerDamage);
+        NeoForge.EVENT_BUS.addListener(this::onChatMessage);
     }
 
     private void onServerStarted(ServerStartedEvent event) {
@@ -205,5 +207,14 @@ public class MinecraftDCLink {
         if (freezeManager.isFrozen(player.getUUID())) {
             event.setNewDamage(0.0F);
         }
+    }
+
+    private void onChatMessage(ServerChatEvent event) {
+        ServerPlayer player = event.getPlayer();
+        Component prefix = roleManager.getPrefixComponent(player.getUUID());
+        if (prefix == null) {
+            return;
+        }
+        event.setMessage(Component.literal("").append(prefix).append(event.getMessage()));
     }
 }
