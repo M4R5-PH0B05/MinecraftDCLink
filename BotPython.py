@@ -7,6 +7,7 @@ from discord import app_commands
 from dotenv import load_dotenv
 import aiohttp
 from aiohttp import web
+from mctools import RCONClient
 
 # ENV VARIABLES
 load_dotenv()
@@ -245,6 +246,7 @@ class MCRegistrationClient(discord.Client):
         await self.update_panel()
         return web.json_response({'ok': True})
 
+
     async def panel_loop(self):
         while True:
             try:
@@ -414,6 +416,9 @@ class RegistrationBot:
         self.client.query_port = int(os.getenv('MC_QUERY_PORT', '25565'))
         self.client.status_url = os.getenv('MC_STATUS_URL', '').strip()
         self.client.server_address = os.getenv('MC_SERVER_ADDRESS', '').strip()
+        self.rcon_host = os.getenv('RCON_HOST', '')
+        self.rcon_port = int(os.getenv('RCON_PORT', '25575'))
+        self.rcon_password = os.getenv('RCON_PASSWORD', '')
         self.setup_commands()
 
     def setup_commands(self):
@@ -557,6 +562,74 @@ class RegistrationBot:
                         ephemeral=True
                     )
 
+        @self.client.tree.command(name="profile", description="Show Minecraft profile stats")
+        @app_commands.describe(minecraft_name="Minecraft name to look up")
+        async def profile(interaction: discord.Interaction, minecraft_name: str = None):
+            if not self.client.pool:
+                await interaction.response.send_message("Database connection error. Please contact an admin.",
+                                                        ephemeral=True)
+                return
+
+            await interaction.response.defer()
+
+            async with self.client.pool.acquire() as conn:
+                if minecraft_name:
+                    user_row = await conn.fetchrow(
+                        'SELECT minecraft_uuid, current_username FROM users WHERE current_username = $1',
+                        minecraft_name
+                    )
+                else:
+                    user_row = await conn.fetchrow(
+                        'SELECT minecraft_uuid, current_username FROM users WHERE discord_id = $1',
+                        interaction.user.id
+                    )
+
+                if not user_row:
+                    await interaction.followup.send(
+                        "No linked account found.",
+                        ephemeral=True
+                    )
+                    return
+
+                minecraft_uuid = user_row['minecraft_uuid']
+                display_name = user_row['current_username']
+
+            if not self.rcon_host or not self.rcon_password:
+                await interaction.followup.send(
+                    "RCON is not configured. Please contact an admin.",
+                    ephemeral=True
+                )
+                return
+
+            stats = await self.fetch_profile_via_rcon(display_name)
+            if stats is None:
+                await interaction.followup.send(
+                    "Could not fetch live stats. Make sure you are online and try again.",
+                    ephemeral=True
+                )
+                return
+
+            level = stats['level']
+            playtime_seconds = stats['playtime_seconds']
+            deaths = stats['deaths']
+            last_updated = stats['last_updated']
+
+            hours = playtime_seconds // 3600
+            minutes = (playtime_seconds % 3600) // 60
+
+            embed = discord.Embed(
+                title=f"{display_name}'s Profile",
+                color=discord.Color.orange(),
+                description="Live stats fetched from the server."
+            )
+            embed.set_thumbnail(url=f"https://crafatar.com/avatars/{minecraft_uuid}?size=64&overlay")
+            embed.add_field(name="Level", value=str(level), inline=True)
+            embed.add_field(name="Playtime", value=f"{hours}h {minutes}m", inline=True)
+            embed.add_field(name="Deaths", value=str(deaths), inline=True)
+            embed.set_footer(text=f"Last updated: {last_updated}")
+
+            await interaction.followup.send(embed=embed)
+
     async def resolve_uuid(self, minecraft_name: str):
         url = f"https://api.mojang.com/users/profiles/minecraft/{minecraft_name}"
         async with aiohttp.ClientSession() as session:
@@ -571,6 +644,47 @@ class RegistrationBot:
 
     async def fetch_online_players(self):
         return await self.client.fetch_online_players()
+
+    async def fetch_profile_via_rcon(self, player_name: str):
+        return await asyncio.to_thread(self._fetch_profile_via_rcon_sync, player_name)
+
+    def _fetch_profile_via_rcon_sync(self, player_name: str):
+        try:
+            client = RCONClient(self.rcon_host, port=self.rcon_port)
+            if not client.login(self.rcon_password):
+                return None
+
+            client.command("scoreboard objectives add dclink_playtime minecraft.custom:minecraft.play_time")
+            client.command("scoreboard objectives add dclink_deaths minecraft.custom:minecraft.deaths")
+
+            level_resp = client.command(f"experience query {player_name} levels")
+            play_resp = client.command(f"scoreboard players get {player_name} dclink_playtime")
+            death_resp = client.command(f"scoreboard players get {player_name} dclink_deaths")
+
+            level = self._parse_last_int(level_resp)
+            playtime_ticks = self._parse_last_int(play_resp)
+            deaths = self._parse_last_int(death_resp)
+
+            if level is None or playtime_ticks is None or deaths is None:
+                return None
+
+            return {
+                'level': level,
+                'playtime_seconds': playtime_ticks // 20,
+                'deaths': deaths,
+                'last_updated': discord.utils.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+            }
+        except Exception:
+            return None
+
+    def _parse_last_int(self, text: str):
+        if not text:
+            return None
+        parts = text.strip().split()
+        for part in reversed(parts):
+            if part.isdigit():
+                return int(part)
+        return None
 
     def run(self):
         self.client.run(os.getenv('DISCORD_BOT_TOKEN'))

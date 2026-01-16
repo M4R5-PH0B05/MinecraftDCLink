@@ -138,6 +138,7 @@ public class MinecraftDCLink {
                 });
 
         event.getDispatcher().register(command);
+
     }
 
     private void onRightClickBlock(PlayerInteractEvent.RightClickBlock event) {
@@ -246,4 +247,5 @@ public class MinecraftDCLink {
         long timeOfDay = dayTime % 24000L;
         dbExecutor.execute(() -> registrationClient.sendServerStatus(day, timeOfDay));
     }
+
 }

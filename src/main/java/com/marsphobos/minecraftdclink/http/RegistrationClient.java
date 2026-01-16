@@ -142,6 +142,7 @@ public class RegistrationClient {
         }
     }
 
+
     public RoleInfo getRoleInfo(UUID playerId) {
         String baseUrl = FileConfig.apiBaseUrl;
         if (baseUrl == null || baseUrl.isBlank()) {

@@ -11,6 +11,7 @@ public class FrozenPlayer {
     private final float pitch;
     private long lastCheckMillis;
     private long lastMessageMillis;
+    private boolean pendingVerification;
 
     public FrozenPlayer(ResourceKey<Level> dimension, Vec3 position, float yaw, float pitch) {
         this.dimension = dimension;
@@ -49,5 +50,13 @@ public class FrozenPlayer {
 
     public void setLastMessageMillis(long lastMessageMillis) {
         this.lastMessageMillis = lastMessageMillis;
+    }
+
+    public boolean isPendingVerification() {
+        return pendingVerification;
+    }
+
+    public void setPendingVerification(boolean pendingVerification) {
+        this.pendingVerification = pendingVerification;
     }
 }

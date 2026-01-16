@@ -43,7 +43,7 @@ public class FreezeManager {
     }
 
     public void handlePlayerJoin(ServerPlayer player) {
-        freeze(player);
+        freeze(player, false);
         scheduleRegistrationCheck(player, true);
     }
 
@@ -91,7 +91,7 @@ public class FreezeManager {
         player.teleportTo(level, pos.x, pos.y, pos.z, frozen.getYaw(), frozen.getPitch());
     }
 
-    private void freeze(ServerPlayer player) {
+    private void freeze(ServerPlayer player, boolean pendingVerification) {
         FrozenPlayer frozen = new FrozenPlayer(
                 player.level().dimension(),
                 player.position(),
@@ -101,6 +101,7 @@ public class FreezeManager {
         long now = System.currentTimeMillis();
         frozen.setLastCheckMillis(now);
         frozen.setLastMessageMillis(now);
+        frozen.setPendingVerification(pendingVerification);
         frozenPlayers.put(player.getUUID(), frozen);
     }
 
@@ -120,6 +121,11 @@ public class FreezeManager {
                 .withStyle(ChatFormatting.RED));
     }
 
+    private void sendWelcome(ServerPlayer player) {
+        player.sendSystemMessage(Component.literal("Welcome back, " + player.getGameProfile().getName() + ".")
+                .withStyle(ChatFormatting.GREEN));
+    }
+
     private void scheduleRegistrationCheck(ServerPlayer player, boolean immediateMessage) {
         if (server == null) {
             return;
@@ -133,15 +139,23 @@ public class FreezeManager {
                         return;
                     }
                     if (registered) {
-                        if (frozenPlayers.containsKey(playerId)) {
-                            unfreeze(current, true);
+                        FrozenPlayer frozen = frozenPlayers.get(playerId);
+                        if (frozen != null) {
+                            if (frozen.isPendingVerification()) {
+                                unfreeze(current, true);
+                            } else {
+                                unfreeze(current, false);
+                                sendWelcome(current);
+                            }
                         } else {
-                            current.sendSystemMessage(Component.literal("Welcome back, " + current.getGameProfile().getName() + ".")
-                                    .withStyle(ChatFormatting.GREEN));
+                            sendWelcome(current);
                         }
                     } else {
-                        if (frozenPlayers.get(playerId) == null) {
-                            freeze(current);
+                        FrozenPlayer frozen = frozenPlayers.get(playerId);
+                        if (frozen == null) {
+                            freeze(current, true);
+                        } else {
+                            frozen.setPendingVerification(true);
                         }
                         if (immediateMessage) {
                             sendInstruction(current);
