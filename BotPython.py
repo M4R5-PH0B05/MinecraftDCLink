@@ -10,46 +10,45 @@ from aiohttp import web
 from mctools import RCONClient
 import traceback
 
+# ENV VARIABLES
 load_dotenv()
 
 
+# MAIN CLASS
 class MCRegistrationClient(discord.Client):
     def __init__(self, *, intents: discord.Intents):
         super().__init__(intents=intents)
-
         self.pool = None
         self.tree = app_commands.CommandTree(self)
         self.api_runner = None
-
         self.log_channel_id = None
         self.log_channel = None
         self.guild_id = None
-
         self.online_players = set()
-
         self.query_host = "127.0.0.1"
         self.query_port = 25565
         self.status_url = ""
         self.panel_message_id = None
-        self.panel_message = None  # ✅ cache message object
+        self.panel_message = None  # ✅ cached discord.Message
         self.last_server_status = {'ping': None, 'version': None}
-
         self.panel_task = None
-        self.profile_task = None
-
         self.server_address = ""
         self.rcon_host = ""
         self.rcon_port = 25575
         self.rcon_password = ""
+        self.profile_task = None
 
-        # ✅ HTTP session reuse + concurrency controls
-        self.http: aiohttp.ClientSession | None = None
+        # ✅ DO NOT use self.http (discord.py uses that internally)
+        self.aiohttp_session: aiohttp.ClientSession | None = None
+
+        # ✅ Panel update controls (prevents “Can't keep up”)
         self.panel_lock = asyncio.Lock()
         self.panel_update_scheduled = False
         self.last_panel_update = 0.0
-        self.min_panel_interval = 10.0  # seconds between Discord edits
-        self.panel_debounce_delay = 2.0  # collapse bursts of triggers
+        self.min_panel_interval = 10.0      # seconds between Discord edits
+        self.panel_debounce_delay = 2.0     # seconds to coalesce bursts
 
+    # CONNECT TO DB
     async def setup_hook(self):
         self.pool = await asyncpg.create_pool(
             host=os.getenv('DB_HOST'),
@@ -90,15 +89,16 @@ class MCRegistrationClient(discord.Client):
         if panel_message.isdigit():
             self.panel_message_id = int(panel_message)
 
-        # ✅ create ONE session for the whole bot
-        self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=6))
+        # ✅ Reuse one ClientSession for all HTTP calls
+        self.aiohttp_session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=6)
+        )
 
         await self.start_api_server()
 
         await self.tree.sync()
         print("Synced Slash Commands.")
 
-        # Start loops
         self.panel_task = asyncio.create_task(self.panel_loop())
         self.profile_task = asyncio.create_task(self.profile_refresh_loop())
 
@@ -110,7 +110,6 @@ class MCRegistrationClient(discord.Client):
         app = web.Application()
         app['pool'] = self.pool
         app['api_key'] = api_key
-
         app.router.add_get('/v1/registration/{minecraft_uuid}', self.handle_registration)
         app.router.add_post('/v1/mc-event', self.handle_mc_event)
         app.router.add_get('/v1/role/{minecraft_uuid}', self.handle_role_info)
@@ -124,11 +123,8 @@ class MCRegistrationClient(discord.Client):
         self.api_runner = runner
         print(f"API server running on {bind_host}:{bind_port}")
 
-    # -------------------------
-    # ✅ Debounced panel updater
-    # -------------------------
+    # ✅ Debounced panel updates
     async def request_panel_update(self):
-        # Coalesce rapid triggers (join/leave/status posts) into ONE update.
         if self.panel_update_scheduled:
             return
         self.panel_update_scheduled = True
@@ -137,7 +133,6 @@ class MCRegistrationClient(discord.Client):
             try:
                 await asyncio.sleep(self.panel_debounce_delay)
 
-                # enforce minimum interval between panel edits
                 loop = asyncio.get_running_loop()
                 now = loop.time()
                 wait = (self.last_panel_update + self.min_panel_interval) - now
@@ -153,9 +148,6 @@ class MCRegistrationClient(discord.Client):
 
         asyncio.create_task(runner())
 
-    # -------------------------
-    # API handlers
-    # -------------------------
     async def handle_registration(self, request: web.Request):
         api_key = request.app['api_key']
         provided_key = request.headers.get('X-API-Key', '')
@@ -215,7 +207,7 @@ class MCRegistrationClient(discord.Client):
         elif event_type == "leave" and minecraft_name:
             self.online_players.discard(minecraft_name)
 
-        # ✅ debounced update instead of immediate
+        # ✅ coalesced update
         await self.request_panel_update()
         return web.json_response({'ok': True})
 
@@ -310,13 +302,10 @@ class MCRegistrationClient(discord.Client):
         self.last_server_status['day'] = day
         self.last_server_status['time'] = time_of_day
 
-        # ✅ debounced update
+        # ✅ coalesced update
         await self.request_panel_update()
         return web.json_response({'ok': True})
 
-    # -------------------------
-    # Panel loop
-    # -------------------------
     async def panel_loop(self):
         while True:
             try:
@@ -340,7 +329,6 @@ class MCRegistrationClient(discord.Client):
                     return
                 self.log_channel = channel
 
-            # Pull data (external HTTP)
             online_names = await self.fetch_online_players()
             if not online_names:
                 online_names = self.online_players
@@ -354,7 +342,6 @@ class MCRegistrationClient(discord.Client):
                 color=discord.Color.blurple(),
                 timestamp=discord.utils.utcnow()
             )
-
             online_count = len(online_names) if online_names else status.get('online', 0)
             max_players = status.get('max', 0)
             ping = status.get('ping', None)
@@ -363,10 +350,8 @@ class MCRegistrationClient(discord.Client):
                 embed.add_field(name="Players", value=f"👥 {online_count}/{max_players}", inline=True)
             else:
                 embed.add_field(name="Players", value=f"👥 {online_count}", inline=True)
-
             if ping is not None:
                 embed.add_field(name="Ping", value=f"📶 {ping} ms", inline=True)
-
             if self.server_address:
                 embed.add_field(name="Server IP", value=f"🔗 {self.server_address}", inline=True)
 
@@ -391,11 +376,7 @@ class MCRegistrationClient(discord.Client):
 
             embed.set_footer(text="MinecraftDCLink • View on GitHub")
 
-            view = self.build_website_view()
-
-            # ✅ Prefer cached message object
             message = self.panel_message
-
             if message is None and self.panel_message_id:
                 try:
                     message = await channel.fetch_message(self.panel_message_id)
@@ -405,6 +386,7 @@ class MCRegistrationClient(discord.Client):
                     self.panel_message = None
                     self.panel_message_id = None
 
+            view = self.build_website_view()
             if message is None:
                 message = await channel.send(embed=embed, view=view)
                 self.panel_message = message
@@ -414,7 +396,6 @@ class MCRegistrationClient(discord.Client):
                 try:
                     await message.edit(embed=embed, view=view)
                 except discord.HTTPException:
-                    # If it was deleted or can't be edited, recreate once
                     message = await channel.send(embed=embed, view=view)
                     self.panel_message = message
                     self.panel_message_id = message.id
@@ -431,13 +412,17 @@ class MCRegistrationClient(discord.Client):
         )
         return view
 
-    # -------------------------
-    # HTTP fetches (✅ reuse session)
-    # -------------------------
     async def fetch_online_players(self):
-        url = self.status_url or f"https://api.mcstatus.io/v2/status/java/{self.query_host}:{self.query_port}"
+        if self.status_url:
+            url = self.status_url
+        else:
+            url = f"https://api.mcstatus.io/v2/status/java/{self.query_host}:{self.query_port}"
+
+        if not self.aiohttp_session:
+            return set()
+
         try:
-            async with self.http.get(url) as response:
+            async with self.aiohttp_session.get(url) as response:
                 if response.status != 200:
                     return set()
                 data = await response.json()
@@ -446,7 +431,6 @@ class MCRegistrationClient(discord.Client):
 
         players = data.get('players', {})
         raw_list = players.get('list', [])
-
         names = []
         if isinstance(raw_list, list):
             for entry in raw_list:
@@ -459,9 +443,16 @@ class MCRegistrationClient(discord.Client):
         return set(names)
 
     async def fetch_server_status(self):
-        url = self.status_url or f"https://api.mcstatus.io/v2/status/java/{self.query_host}:{self.query_port}"
+        if self.status_url:
+            url = self.status_url
+        else:
+            url = f"https://api.mcstatus.io/v2/status/java/{self.query_host}:{self.query_port}"
+
+        if not self.aiohttp_session:
+            return {}
+
         try:
-            async with self.http.get(url) as response:
+            async with self.aiohttp_session.get(url) as response:
                 if response.status != 200:
                     return {}
                 data = await response.json()
@@ -479,23 +470,19 @@ class MCRegistrationClient(discord.Client):
     async def close(self):
         if self.api_runner:
             await self.api_runner.cleanup()
-
         if self.panel_task:
             self.panel_task.cancel()
         if self.profile_task:
             self.profile_task.cancel()
 
-        if self.http:
-            await self.http.close()
+        if self.aiohttp_session:
+            await self.aiohttp_session.close()
 
         if self.pool:
             await self.pool.close()
 
         await super().close()
 
-    # -------------------------
-    # Profile refresh loop
-    # -------------------------
     async def profile_refresh_loop(self):
         while True:
             try:
@@ -515,14 +502,12 @@ class MCRegistrationClient(discord.Client):
                 stats = await self.fetch_profile_via_rcon(name)
                 if stats is None:
                     continue
-
                 user_row = await conn.fetchrow(
                     'SELECT minecraft_uuid FROM users WHERE current_username = $1',
                     name
                 )
                 if not user_row:
                     continue
-
                 minecraft_uuid = user_row['minecraft_uuid']
                 await conn.execute('''
                     INSERT INTO profiles (minecraft_uuid, level, playtime_seconds, deaths, last_updated)
@@ -535,7 +520,6 @@ class MCRegistrationClient(discord.Client):
                 ''', minecraft_uuid, stats['level'], stats['playtime_seconds'], stats['deaths'])
 
     async def fetch_profile_via_rcon(self, player_name: str):
-        # ✅ runs sync RCON in a thread so it can't block the event loop
         return await asyncio.to_thread(self._fetch_profile_via_rcon_sync, player_name)
 
     def _fetch_profile_via_rcon_sync(self, player_name: str):
@@ -579,10 +563,12 @@ class MCRegistrationClient(discord.Client):
         return None
 
 
+# MAIN BOT
 class RegistrationBot:
-    MAX_USERS = 20
+    MAX_USERS = 20  # Maximum number of users allowed to register
 
     def __init__(self):
+        # INTENTS
         intents = discord.Intents.default()
         intents.message_content = False
 
@@ -604,17 +590,23 @@ class RegistrationBot:
                 if not interaction.response.is_done():
                     await interaction.response.defer(ephemeral=True)
 
-                # Prefer cached set first, but still confirm via API if not present
                 if minecraft_name in self.client.online_players:
                     online_players = self.client.online_players
                 else:
                     online_players = await self.client.fetch_online_players()
                     if not online_players:
                         await interaction.followup.send(
-                            "Cannot check online player list right now. Try again later.",
+                            "Cannot check server status right now. Try again later.",
                             ephemeral=True
                         )
                         return
+
+                if not online_players:
+                    await interaction.followup.send(
+                        "Server did not provide an online player list. Rejoin the server and try again.",
+                        ephemeral=True
+                    )
+                    return
 
                 if minecraft_name not in online_players:
                     await interaction.followup.send(
@@ -630,7 +622,6 @@ class RegistrationBot:
                         ephemeral=True
                     )
                     return
-
                 parsed_uuid = uuid.UUID(minecraft_uuid)
 
                 if not self.client.pool:
@@ -691,7 +682,7 @@ class RegistrationBot:
                             ephemeral=True
                         )
 
-            except Exception:
+            except Exception as e:
                 traceback.print_exc()
                 try:
                     await interaction.followup.send("Registration failed due to an internal error.", ephemeral=True)
@@ -701,8 +692,10 @@ class RegistrationBot:
         @self.client.tree.command(name="checklink", description="Check your Minecraft account link")
         async def check_link(interaction: discord.Interaction):
             if not self.client.pool:
-                await interaction.response.send_message("Database connection error. Please contact an admin.",
-                                                        ephemeral=True)
+                await interaction.response.send_message(
+                    "Database connection error. Please contact an admin.",
+                    ephemeral=True
+                )
                 return
 
             async with self.client.pool.acquire() as conn:
@@ -726,8 +719,10 @@ class RegistrationBot:
         @app_commands.describe(minecraft_name="Minecraft name to look up")
         async def profile(interaction: discord.Interaction, minecraft_name: str = None):
             if not self.client.pool:
-                await interaction.response.send_message("Database connection error. Please contact an admin.",
-                                                        ephemeral=True)
+                await interaction.response.send_message(
+                    "Database connection error. Please contact an admin.",
+                    ephemeral=True
+                )
                 return
 
             await interaction.response.defer()
@@ -752,10 +747,14 @@ class RegistrationBot:
             display_name = user_row['current_username']
 
             if not self.client.rcon_host or not self.client.rcon_password:
-                await interaction.followup.send("RCON is not configured. Please contact an admin.", ephemeral=True)
+                await interaction.followup.send(
+                    "RCON is not configured. Please contact an admin.",
+                    ephemeral=True
+                )
                 return
 
             stats = await self.client.fetch_profile_via_rcon(display_name)
+            cache_row = None
 
             if stats is not None:
                 level = stats['level']
@@ -810,8 +809,12 @@ class RegistrationBot:
 
     async def resolve_uuid(self, minecraft_name: str):
         url = f"https://api.mojang.com/users/profiles/minecraft/{minecraft_name}"
+
+        if not self.client.aiohttp_session:
+            return None
+
         try:
-            async with self.client.http.get(url) as response:
+            async with self.client.aiohttp_session.get(url) as response:
                 if response.status != 200:
                     return None
                 data = await response.json()
@@ -822,6 +825,9 @@ class RegistrationBot:
         if not raw_uuid or len(raw_uuid) != 32:
             return None
         return str(uuid.UUID(raw_uuid))
+
+    async def fetch_online_players(self):
+        return await self.client.fetch_online_players()
 
     def run(self):
         self.client.run(os.getenv('DISCORD_BOT_TOKEN'))
