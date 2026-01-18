@@ -8,35 +8,48 @@ from dotenv import load_dotenv
 import aiohttp
 from aiohttp import web
 from mctools import RCONClient
+import traceback
 
-# ENV VARIABLES
 load_dotenv()
 
 
-# MAIN CLASS
 class MCRegistrationClient(discord.Client):
     def __init__(self, *, intents: discord.Intents):
         super().__init__(intents=intents)
+
         self.pool = None
         self.tree = app_commands.CommandTree(self)
         self.api_runner = None
+
         self.log_channel_id = None
         self.log_channel = None
         self.guild_id = None
+
         self.online_players = set()
+
         self.query_host = "127.0.0.1"
         self.query_port = 25565
         self.status_url = ""
         self.panel_message_id = None
+        self.panel_message = None  # ✅ cache message object
         self.last_server_status = {'ping': None, 'version': None}
+
         self.panel_task = None
+        self.profile_task = None
+
         self.server_address = ""
         self.rcon_host = ""
         self.rcon_port = 25575
         self.rcon_password = ""
-        self.profile_task = None
 
-    # CONNECT TO DB
+        # ✅ HTTP session reuse + concurrency controls
+        self.http: aiohttp.ClientSession | None = None
+        self.panel_lock = asyncio.Lock()
+        self.panel_update_scheduled = False
+        self.last_panel_update = 0.0
+        self.min_panel_interval = 10.0  # seconds between Discord edits
+        self.panel_debounce_delay = 2.0  # collapse bursts of triggers
+
     async def setup_hook(self):
         self.pool = await asyncpg.create_pool(
             host=os.getenv('DB_HOST'),
@@ -77,11 +90,15 @@ class MCRegistrationClient(discord.Client):
         if panel_message.isdigit():
             self.panel_message_id = int(panel_message)
 
+        # ✅ create ONE session for the whole bot
+        self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=6))
+
         await self.start_api_server()
 
         await self.tree.sync()
         print("Synced Slash Commands.")
 
+        # Start loops
         self.panel_task = asyncio.create_task(self.panel_loop())
         self.profile_task = asyncio.create_task(self.profile_refresh_loop())
 
@@ -93,6 +110,7 @@ class MCRegistrationClient(discord.Client):
         app = web.Application()
         app['pool'] = self.pool
         app['api_key'] = api_key
+
         app.router.add_get('/v1/registration/{minecraft_uuid}', self.handle_registration)
         app.router.add_post('/v1/mc-event', self.handle_mc_event)
         app.router.add_get('/v1/role/{minecraft_uuid}', self.handle_role_info)
@@ -106,6 +124,38 @@ class MCRegistrationClient(discord.Client):
         self.api_runner = runner
         print(f"API server running on {bind_host}:{bind_port}")
 
+    # -------------------------
+    # ✅ Debounced panel updater
+    # -------------------------
+    async def request_panel_update(self):
+        # Coalesce rapid triggers (join/leave/status posts) into ONE update.
+        if self.panel_update_scheduled:
+            return
+        self.panel_update_scheduled = True
+
+        async def runner():
+            try:
+                await asyncio.sleep(self.panel_debounce_delay)
+
+                # enforce minimum interval between panel edits
+                loop = asyncio.get_running_loop()
+                now = loop.time()
+                wait = (self.last_panel_update + self.min_panel_interval) - now
+                if wait > 0:
+                    await asyncio.sleep(wait)
+
+                await self.update_panel()
+                self.last_panel_update = loop.time()
+            except Exception:
+                traceback.print_exc()
+            finally:
+                self.panel_update_scheduled = False
+
+        asyncio.create_task(runner())
+
+    # -------------------------
+    # API handlers
+    # -------------------------
     async def handle_registration(self, request: web.Request):
         api_key = request.app['api_key']
         provided_key = request.headers.get('X-API-Key', '')
@@ -155,7 +205,7 @@ class MCRegistrationClient(discord.Client):
             return web.json_response({'ok': False, 'error': 'log_channel_not_configured'}, status=400)
 
         async with request.app['pool'].acquire() as conn:
-            result = await conn.fetchrow(
+            _ = await conn.fetchrow(
                 'SELECT discord_id FROM users WHERE minecraft_uuid = $1',
                 minecraft_uuid
             )
@@ -165,7 +215,8 @@ class MCRegistrationClient(discord.Client):
         elif event_type == "leave" and minecraft_name:
             self.online_players.discard(minecraft_name)
 
-        await self.update_panel()
+        # ✅ debounced update instead of immediate
+        await self.request_panel_update()
         return web.json_response({'ok': True})
 
     async def handle_role_info(self, request: web.Request):
@@ -225,6 +276,7 @@ class MCRegistrationClient(discord.Client):
             self.last_server_status['ping'] = ping
         if version:
             self.last_server_status['version'] = version
+
         payload = {
             'ok': True,
             'players': {
@@ -257,93 +309,116 @@ class MCRegistrationClient(discord.Client):
 
         self.last_server_status['day'] = day
         self.last_server_status['time'] = time_of_day
-        await self.update_panel()
+
+        # ✅ debounced update
+        await self.request_panel_update()
         return web.json_response({'ok': True})
 
-
+    # -------------------------
+    # Panel loop
+    # -------------------------
     async def panel_loop(self):
         while True:
             try:
-                await self.update_panel()
+                await self.request_panel_update()
             except Exception:
-                pass
+                traceback.print_exc()
             await asyncio.sleep(30)
 
     async def update_panel(self):
-        if not self.log_channel_id:
-            return
-
-        channel = self.log_channel
-        if channel is None:
-            channel = self.get_channel(self.log_channel_id)
-        if channel is None:
-            try:
-                channel = await self.fetch_channel(self.log_channel_id)
-            except discord.HTTPException:
+        async with self.panel_lock:
+            if not self.log_channel_id:
                 return
-            self.log_channel = channel
 
-        online_names = await self.fetch_online_players()
-        if online_names is None or not online_names:
-            online_names = self.online_players
+            channel = self.log_channel
+            if channel is None:
+                channel = self.get_channel(self.log_channel_id)
+            if channel is None:
+                try:
+                    channel = await self.fetch_channel(self.log_channel_id)
+                except discord.HTTPException:
+                    return
+                self.log_channel = channel
 
-        status = await self.fetch_server_status()
+            # Pull data (external HTTP)
+            online_names = await self.fetch_online_players()
+            if not online_names:
+                online_names = self.online_players
 
-        embed = discord.Embed(
-            title="Minecraft Server Panel",
-            url="https://github.com/M4R5-PH0B05/MinecraftDCLink",
-            description="This panel shows live server status, online players, and game time. Any issues, contact mars_phobos.",
-            color=discord.Color.blurple(),
-            timestamp=discord.utils.utcnow()
-        )
-        online_count = len(online_names) if online_names else status.get('online', 0)
-        max_players = status.get('max', 0)
-        ping = status.get('ping', None)
+            status = await self.fetch_server_status()
 
-        if max_players:
-            embed.add_field(name="Players", value=f"👥 {online_count}/{max_players}", inline=True)
-        else:
-            embed.add_field(name="Players", value=f"👥 {online_count}", inline=True)
-        if ping is not None:
-            embed.add_field(name="Ping", value=f"📶 {ping} ms", inline=True)
-        if self.server_address:
-            embed.add_field(name="Server IP", value=f"🔗 {self.server_address}", inline=True)
+            embed = discord.Embed(
+                title="Minecraft Server Panel",
+                url="https://github.com/M4R5-PH0B05/MinecraftDCLink",
+                description="This panel shows live server status, online players, and game time. Any issues, contact mars_phobos.",
+                color=discord.Color.blurple(),
+                timestamp=discord.utils.utcnow()
+            )
 
-        day = self.last_server_status.get('day')
-        time_of_day = self.last_server_status.get('time')
-        if isinstance(day, int) and isinstance(time_of_day, int):
-            hour = ((time_of_day + 6000) % 24000) / 1000.0
-            hours = int(hour)
-            minutes = int((hour - hours) * 60)
-            embed.add_field(name="Game Time", value=f"🗓️ Day {day}, ⏱️ {hours:02d}:{minutes:02d}", inline=True)
-        else:
-            embed.add_field(name="Game Time", value="🗓️ Unknown", inline=True)
+            online_count = len(online_names) if online_names else status.get('online', 0)
+            max_players = status.get('max', 0)
+            ping = status.get('ping', None)
 
-        if online_names:
-            names_list = sorted(online_names)
-            players_value = ", ".join([f"🟢 {name}" for name in names_list])
-            if len(players_value) > 1000:
-                players_value = players_value[:1000] + "..."
-            embed.add_field(name="Online Players", value=players_value, inline=False)
-        else:
-            embed.add_field(name="Online Players", value="🔴 None", inline=False)
+            if max_players:
+                embed.add_field(name="Players", value=f"👥 {online_count}/{max_players}", inline=True)
+            else:
+                embed.add_field(name="Players", value=f"👥 {online_count}", inline=True)
 
-        embed.set_footer(text="MinecraftDCLink • View on GitHub")
+            if ping is not None:
+                embed.add_field(name="Ping", value=f"📶 {ping} ms", inline=True)
 
-        message = None
-        if self.panel_message_id:
-            try:
-                message = await channel.fetch_message(self.panel_message_id)
-            except discord.HTTPException:
-                message = None
+            if self.server_address:
+                embed.add_field(name="Server IP", value=f"🔗 {self.server_address}", inline=True)
 
-        view = self.build_website_view()
-        if message is None:
-            message = await channel.send(embed=embed, view=view)
-            self.panel_message_id = message.id
-            print(f"Panel message ID: {self.panel_message_id}")
-        else:
-            await message.edit(embed=embed, view=view)
+            day = self.last_server_status.get('day')
+            time_of_day = self.last_server_status.get('time')
+            if isinstance(day, int) and isinstance(time_of_day, int):
+                hour = ((time_of_day + 6000) % 24000) / 1000.0
+                hours = int(hour)
+                minutes = int((hour - hours) * 60)
+                embed.add_field(name="Game Time", value=f"🗓️ Day {day}, ⏱️ {hours:02d}:{minutes:02d}", inline=True)
+            else:
+                embed.add_field(name="Game Time", value="🗓️ Unknown", inline=True)
+
+            if online_names:
+                names_list = sorted(online_names)
+                players_value = ", ".join([f"🟢 {name}" for name in names_list])
+                if len(players_value) > 1000:
+                    players_value = players_value[:1000] + "..."
+                embed.add_field(name="Online Players", value=players_value, inline=False)
+            else:
+                embed.add_field(name="Online Players", value="🔴 None", inline=False)
+
+            embed.set_footer(text="MinecraftDCLink • View on GitHub")
+
+            view = self.build_website_view()
+
+            # ✅ Prefer cached message object
+            message = self.panel_message
+
+            if message is None and self.panel_message_id:
+                try:
+                    message = await channel.fetch_message(self.panel_message_id)
+                    self.panel_message = message
+                except discord.HTTPException:
+                    message = None
+                    self.panel_message = None
+                    self.panel_message_id = None
+
+            if message is None:
+                message = await channel.send(embed=embed, view=view)
+                self.panel_message = message
+                self.panel_message_id = message.id
+                print(f"Panel message ID: {self.panel_message_id}")
+            else:
+                try:
+                    await message.edit(embed=embed, view=view)
+                except discord.HTTPException:
+                    # If it was deleted or can't be edited, recreate once
+                    message = await channel.send(embed=embed, view=view)
+                    self.panel_message = message
+                    self.panel_message_id = message.id
+                    print(f"Panel message recreated. ID: {self.panel_message_id}")
 
     def build_website_view(self):
         view = discord.ui.View(timeout=None)
@@ -356,25 +431,24 @@ class MCRegistrationClient(discord.Client):
         )
         return view
 
+    # -------------------------
+    # HTTP fetches (✅ reuse session)
+    # -------------------------
     async def fetch_online_players(self):
-        if self.status_url:
-            url = self.status_url
-        else:
-            url = f"https://api.mcstatus.io/v2/status/java/{self.query_host}:{self.query_port}"
-
+        url = self.status_url or f"https://api.mcstatus.io/v2/status/java/{self.query_host}:{self.query_port}"
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=5) as response:
-                    if response.status != 200:
-                        return None
-                    data = await response.json()
+            async with self.http.get(url) as response:
+                if response.status != 200:
+                    return set()
+                data = await response.json()
         except Exception:
-            return None
+            return set()
 
         players = data.get('players', {})
         raw_list = players.get('list', [])
+
+        names = []
         if isinstance(raw_list, list):
-            names = []
             for entry in raw_list:
                 if isinstance(entry, str):
                     names.append(entry)
@@ -382,21 +456,15 @@ class MCRegistrationClient(discord.Client):
                     name = entry.get('name_raw') or entry.get('name_clean') or entry.get('name')
                     if name:
                         names.append(name)
-            return set(names)
-        return set()
+        return set(names)
 
     async def fetch_server_status(self):
-        if self.status_url:
-            url = self.status_url
-        else:
-            url = f"https://api.mcstatus.io/v2/status/java/{self.query_host}:{self.query_port}"
-
+        url = self.status_url or f"https://api.mcstatus.io/v2/status/java/{self.query_host}:{self.query_port}"
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=5) as response:
-                    if response.status != 200:
-                        return {}
-                    data = await response.json()
+            async with self.http.get(url) as response:
+                if response.status != 200:
+                    return {}
+                data = await response.json()
         except Exception:
             return {}
 
@@ -411,18 +479,29 @@ class MCRegistrationClient(discord.Client):
     async def close(self):
         if self.api_runner:
             await self.api_runner.cleanup()
+
         if self.panel_task:
             self.panel_task.cancel()
         if self.profile_task:
             self.profile_task.cancel()
+
+        if self.http:
+            await self.http.close()
+
+        if self.pool:
+            await self.pool.close()
+
         await super().close()
 
+    # -------------------------
+    # Profile refresh loop
+    # -------------------------
     async def profile_refresh_loop(self):
         while True:
             try:
                 await self.refresh_online_profiles()
             except Exception:
-                pass
+                traceback.print_exc()
             await asyncio.sleep(600)
 
     async def refresh_online_profiles(self):
@@ -436,12 +515,14 @@ class MCRegistrationClient(discord.Client):
                 stats = await self.fetch_profile_via_rcon(name)
                 if stats is None:
                     continue
+
                 user_row = await conn.fetchrow(
                     'SELECT minecraft_uuid FROM users WHERE current_username = $1',
                     name
                 )
                 if not user_row:
                     continue
+
                 minecraft_uuid = user_row['minecraft_uuid']
                 await conn.execute('''
                     INSERT INTO profiles (minecraft_uuid, level, playtime_seconds, deaths, last_updated)
@@ -454,6 +535,7 @@ class MCRegistrationClient(discord.Client):
                 ''', minecraft_uuid, stats['level'], stats['playtime_seconds'], stats['deaths'])
 
     async def fetch_profile_via_rcon(self, player_name: str):
+        # ✅ runs sync RCON in a thread so it can't block the event loop
         return await asyncio.to_thread(self._fetch_profile_via_rcon_sync, player_name)
 
     def _fetch_profile_via_rcon_sync(self, player_name: str):
@@ -496,13 +578,11 @@ class MCRegistrationClient(discord.Client):
                 return int(part)
         return None
 
-# MAIN BOT
+
 class RegistrationBot:
-    MAX_USERS = 20  # Maximum number of users allowed to register
+    MAX_USERS = 20
 
     def __init__(self):
-        # INTENTS
-        print("")
         intents = discord.Intents.default()
         intents.message_content = False
 
@@ -524,23 +604,17 @@ class RegistrationBot:
                 if not interaction.response.is_done():
                     await interaction.response.defer(ephemeral=True)
 
+                # Prefer cached set first, but still confirm via API if not present
                 if minecraft_name in self.client.online_players:
                     online_players = self.client.online_players
                 else:
                     online_players = await self.client.fetch_online_players()
-                    if online_players is None:
+                    if not online_players:
                         await interaction.followup.send(
-                            "Cannot check server status right now. Try again later.",
+                            "Cannot check online player list right now. Try again later.",
                             ephemeral=True
                         )
                         return
-
-                if not online_players:
-                    await interaction.followup.send(
-                        "Server did not provide an online player list. Rejoin the server and try again.",
-                        ephemeral=True
-                    )
-                    return
 
                 if minecraft_name not in online_players:
                     await interaction.followup.send(
@@ -556,6 +630,7 @@ class RegistrationBot:
                         ephemeral=True
                     )
                     return
+
                 parsed_uuid = uuid.UUID(minecraft_uuid)
 
                 if not self.client.pool:
@@ -563,75 +638,65 @@ class RegistrationBot:
                     return
 
                 async with self.client.pool.acquire() as conn:
-                    try:
-                        # First, check the total number of registered users
-                        result = await conn.fetchrow('SELECT COUNT(*) AS user_count FROM users')
-                        current_user_count = result['user_count']
+                    result = await conn.fetchrow('SELECT COUNT(*) AS user_count FROM users')
+                    current_user_count = result['user_count']
 
-                        # Check if we've reached the maximum number of users
-                        if current_user_count >= self.MAX_USERS:
-                            await interaction.followup.send(
-                                f"Registration is full. Maximum of {self.MAX_USERS} users have already been registered.",
-                                ephemeral=True
-                            )
-                            return
-
-                        # Check if this user is already registered
-                        existing_user = await conn.fetchrow(
-                            'SELECT 1 FROM users WHERE discord_id = $1 OR minecraft_uuid = $2',
-                            interaction.user.id, str(parsed_uuid)
-                        )
-
-                        if existing_user:
-                            await interaction.followup.send(
-                                "Either your Discord account or this Minecraft account are already registered.",
-                                ephemeral=True
-                            )
-                            return
-
-                        # Proceed with registration
-                        await conn.execute('''
-                            INSERT INTO users (minecraft_uuid, discord_id, current_username)
-                            VALUES ($1, $2, $3)
-                            ON CONFLICT (minecraft_uuid)
-                            DO UPDATE SET
-                                discord_id = EXCLUDED.discord_id,
-                                current_username = EXCLUDED.current_username
-                        ''', str(parsed_uuid), interaction.user.id, minecraft_name)
-
-                        embed = discord.Embed(
-                            title="Registration successful",
-                            description=f"Linked `{minecraft_name}`. You can now join the server.",
-                            color=discord.Color.green()
-                        )
-                        embed.set_thumbnail(url=f"https://minotar.net/avatar/{minecraft_name}/64")
-                        await interaction.followup.send(embed=embed, ephemeral=True)
-
-                        if interaction.guild and isinstance(interaction.user, discord.Member):
-                            try:
-                                await interaction.user.edit(nick=minecraft_name)
-                            except discord.Forbidden:
-                                await interaction.followup.send(
-                                    "Linked, but I don't have permission to change your nickname.",
-                                    ephemeral=True
-                                )
-                            except discord.HTTPException:
-                                await interaction.followup.send(
-                                    "Linked, but I couldn't change your nickname.",
-                                    ephemeral=True
-                                )
-
-                    except Exception as db_error:
+                    if current_user_count >= self.MAX_USERS:
                         await interaction.followup.send(
-                            f"Registration failed: {str(db_error)}",
+                            f"Registration is full. Maximum of {self.MAX_USERS} users have already been registered.",
+                            ephemeral=True
+                        )
+                        return
+
+                    existing_user = await conn.fetchrow(
+                        'SELECT 1 FROM users WHERE discord_id = $1 OR minecraft_uuid = $2',
+                        interaction.user.id, str(parsed_uuid)
+                    )
+
+                    if existing_user:
+                        await interaction.followup.send(
+                            "Either your Discord account or this Minecraft account are already registered.",
+                            ephemeral=True
+                        )
+                        return
+
+                    await conn.execute('''
+                        INSERT INTO users (minecraft_uuid, discord_id, current_username)
+                        VALUES ($1, $2, $3)
+                        ON CONFLICT (minecraft_uuid)
+                        DO UPDATE SET
+                            discord_id = EXCLUDED.discord_id,
+                            current_username = EXCLUDED.current_username
+                    ''', str(parsed_uuid), interaction.user.id, minecraft_name)
+
+                embed = discord.Embed(
+                    title="Registration successful",
+                    description=f"Linked `{minecraft_name}`. You can now join the server.",
+                    color=discord.Color.green()
+                )
+                embed.set_thumbnail(url=f"https://minotar.net/avatar/{minecraft_name}/64")
+                await interaction.followup.send(embed=embed, ephemeral=True)
+
+                if interaction.guild and isinstance(interaction.user, discord.Member):
+                    try:
+                        await interaction.user.edit(nick=minecraft_name)
+                    except discord.Forbidden:
+                        await interaction.followup.send(
+                            "Linked, but I don't have permission to change your nickname.",
+                            ephemeral=True
+                        )
+                    except discord.HTTPException:
+                        await interaction.followup.send(
+                            "Linked, but I couldn't change your nickname.",
                             ephemeral=True
                         )
 
-            except ValueError:
-                await interaction.followup.send(
-                    "Invalid UUID format. Please provide a valid minecraft UUID.",
-                    ephemeral=True
-                )
+            except Exception:
+                traceback.print_exc()
+                try:
+                    await interaction.followup.send("Registration failed due to an internal error.", ephemeral=True)
+                except Exception:
+                    pass
 
         @self.client.tree.command(name="checklink", description="Check your Minecraft account link")
         async def check_link(interaction: discord.Interaction):
@@ -646,16 +711,16 @@ class RegistrationBot:
                     interaction.user.id
                 )
 
-                if result:
-                    await interaction.response.send_message(
-                        f"Your Discord is linked to the Minecraft account with the UUID: `{result['minecraft_uuid']}`",
-                        ephemeral=True
-                    )
-                else:
-                    await interaction.response.send_message(
-                        "No Minecraft account is currently linked to your Discord.",
-                        ephemeral=True
-                    )
+            if result:
+                await interaction.response.send_message(
+                    f"Your Discord is linked to the Minecraft account UUID: `{result['minecraft_uuid']}`",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "No Minecraft account is currently linked to your Discord.",
+                    ephemeral=True
+                )
 
         @self.client.tree.command(name="profile", description="Show Minecraft profile stats")
         @app_commands.describe(minecraft_name="Minecraft name to look up")
@@ -679,25 +744,18 @@ class RegistrationBot:
                         interaction.user.id
                     )
 
-                if not user_row:
-                    await interaction.followup.send(
-                        "No linked account found.",
-                        ephemeral=True
-                    )
-                    return
+            if not user_row:
+                await interaction.followup.send("No linked account found.", ephemeral=True)
+                return
 
-                minecraft_uuid = user_row['minecraft_uuid']
-                display_name = user_row['current_username']
+            minecraft_uuid = user_row['minecraft_uuid']
+            display_name = user_row['current_username']
 
             if not self.client.rcon_host or not self.client.rcon_password:
-                await interaction.followup.send(
-                    "RCON is not configured. Please contact an admin.",
-                    ephemeral=True
-                )
+                await interaction.followup.send("RCON is not configured. Please contact an admin.", ephemeral=True)
                 return
 
             stats = await self.client.fetch_profile_via_rcon(display_name)
-            cache_row = None
 
             if stats is not None:
                 level = stats['level']
@@ -752,19 +810,18 @@ class RegistrationBot:
 
     async def resolve_uuid(self, minecraft_name: str):
         url = f"https://api.mojang.com/users/profiles/minecraft/{minecraft_name}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
+        try:
+            async with self.client.http.get(url) as response:
                 if response.status != 200:
                     return None
                 data = await response.json()
-                raw_uuid = data.get('id')
-                if not raw_uuid or len(raw_uuid) != 32:
-                    return None
-                return str(uuid.UUID(raw_uuid))
+        except Exception:
+            return None
 
-    async def fetch_online_players(self):
-        return await self.client.fetch_online_players()
-
+        raw_uuid = data.get('id')
+        if not raw_uuid or len(raw_uuid) != 32:
+            return None
+        return str(uuid.UUID(raw_uuid))
 
     def run(self):
         self.client.run(os.getenv('DISCORD_BOT_TOKEN'))
